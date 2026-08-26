@@ -1,0 +1,11 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+    "-C", "linker=rust-lld",
+    "-L", "native=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231/lib/x64",
+    "-L", "native=C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64",
+    "-L", "native=C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64"
+]
