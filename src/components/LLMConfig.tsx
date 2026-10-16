@@ -13,6 +13,7 @@ import {
   preloadLocalModel,
   isModelReady,
   detectHardwareAcceleration,
+  setHardwareAccelerationOverride,
   evaluateHardwareProfile,
   type HardwareProfile,
   getModelStorage,
@@ -184,9 +185,13 @@ export default function LLMConfigPanel() {
       await preloadLocalModel(modelToDownload, setLocalProgress);
       refreshStorage();
     } catch (err: any) {
+      if (hwAccel === 'webgpu' && (err?.message?.includes('webgpu') || err?.message?.includes('backend'))) {
+        setHwAccel('wasm');
+        setHardwareAccelerationOverride('wasm');
+      }
       setTestError(err?.message ?? 'Download failed');
     }
-  }, [llmConfig.model, refreshStorage]);
+  }, [llmConfig.model, refreshStorage, hwAccel]);
 
   const ready = isLocal && (isModelReady(llmConfig.model) || localProgress?.status === 'ready');
   const preset = PROVIDER_PRESETS[llmConfig.provider] ?? PROVIDER_PRESETS.local;
@@ -200,18 +205,24 @@ export default function LLMConfigPanel() {
           {isLocal ? t('hub.title') : t('llm.provider')}
         </span>
 
-        {/* Hardware Acceleration Indicator */}
+        {/* Hardware Acceleration Indicator / Toggle */}
         {isLocal && (
-          <span
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border ${
+          <button
+            type="button"
+            onClick={() => {
+              const next = hwAccel === 'webgpu' ? 'wasm' : 'webgpu';
+              setHwAccel(next);
+              setHardwareAccelerationOverride(next);
+            }}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border transition-all cursor-pointer ${
               hwAccel === 'webgpu'
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
-                : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30 hover:bg-slate-500/20'
             }`}
-            title={hwAccel === 'webgpu' ? 'WebGPU accelerated inference' : 'CPU WebAssembly inference'}
+            title={hwAccel === 'webgpu' ? 'WebGPU enabled. Click to switch to CPU WebAssembly (WASM).' : 'CPU WebAssembly active. Click to switch to WebGPU.'}
           >
-            ⚡ {hwAccel.toUpperCase()}
-          </span>
+            {hwAccel === 'webgpu' ? '⚡ WEBGPU' : '⚙ WASM'}
+          </button>
         )}
 
         {/* Provider selector */}

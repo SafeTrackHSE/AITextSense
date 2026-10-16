@@ -8,7 +8,7 @@
  * distance metric against a calibrated HUMAN baseline — so "humanization"
  * becomes a measurable target instead of a heuristic.
  */
-import type { ProgressFn } from '../llm/local';
+import { detectHardwareAcceleration, type ProgressFn } from '../llm/local';
 
 export interface PerplexityWindow {
   startToken: number;
@@ -67,8 +67,8 @@ async function getLM(
       env.allowLocalModels = false;
       onProgress?.({ status: 'downloading', percent: 5, message: 'Loading scorer model…' });
 
-      const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
-      const device = hasWebGPU ? 'webgpu' : 'wasm';
+      const hwDevice = await detectHardwareAcceleration();
+      const device = hwDevice === 'webgpu' ? 'webgpu' : 'wasm';
 
       const tokenizer = await AutoTokenizer.from_pretrained(modelId);
       let model;

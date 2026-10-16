@@ -54,21 +54,43 @@ function notifyProgress(onProgress: ProgressFn | undefined, status: LocalLoadSta
 const pipelineCache = new Map<string, unknown>();
 const loadingPromises = new Map<string, Promise<unknown>>();
 
+let cachedHardwareAccel: 'webgpu' | 'wasm' | null = null;
+
+/** Override or set the preferred hardware acceleration ('webgpu' | 'wasm' | null). */
+export function setHardwareAccelerationOverride(pref: 'webgpu' | 'wasm' | null) {
+  cachedHardwareAccel = pref;
+}
+
 /** True when this browser exposes WebGPU (much faster than the WASM fallback). */
 export function hasWebGPU(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator && !!(navigator as any).gpu;
 }
 
-/** Detect hardware acceleration capability. */
+/** Detect hardware acceleration capability with device creation verification. */
 export async function detectHardwareAcceleration(): Promise<'webgpu' | 'wasm'> {
+  if (cachedHardwareAccel) return cachedHardwareAccel;
   if (hasWebGPU()) {
     try {
       const adapter = await (navigator as any).gpu.requestAdapter();
-      if (adapter) return 'webgpu';
+      if (!adapter) {
+        cachedHardwareAccel = 'wasm';
+        return 'wasm';
+      }
+      // Verify device creation (handles WebView2 / GPU policy restrictions)
+      const device = await adapter.requestDevice();
+      if (!device) {
+        cachedHardwareAccel = 'wasm';
+        return 'wasm';
+      }
+      device.destroy?.();
+      cachedHardwareAccel = 'webgpu';
+      return 'webgpu';
     } catch {
-      // fallback to wasm
+      cachedHardwareAccel = 'wasm';
+      return 'wasm';
     }
   }
+  cachedHardwareAccel = 'wasm';
   return 'wasm';
 }
 
@@ -159,7 +181,8 @@ export async function getPipeline(modelId: string, onProgress?: ProgressFn): Pro
       }
     };
 
-    const device = hasWebGPU() ? 'webgpu' : 'wasm';
+    const hwDevice = await detectHardwareAcceleration();
+    const device = hwDevice === 'webgpu' ? 'webgpu' : 'wasm';
     notifyProgress(onProgress, 'downloading', 0, 'Starting download…');
 
     const modelOption = LOCAL_MODELS.find(m => m.id === modelId);
@@ -170,9 +193,14 @@ export async function getPipeline(modelId: string, onProgress?: ProgressFn): Pro
     let pipe: unknown;
     try {
       pipe = await pipeline(task as any, modelId, { device, dtype: dtype as any, progress_callback });
-    } catch {
-      // WebGPU can fail on some webviews (e.g. macOS Tauri) — fall back to WASM.
-      pipe = await pipeline(task as any, modelId, { device: 'wasm', dtype: dtype as any, progress_callback });
+    } catch (primaryErr) {
+      if (device === 'webgpu') {
+        cachedHardwareAccel = 'wasm';
+        notifyProgress(onProgress, 'downloading', 5, 'WebGPU unavailable, switching to CPU (WASM)…');
+        pipe = await pipeline(task as any, modelId, { device: 'wasm', dtype: dtype as any, progress_callback });
+      } else {
+        throw primaryErr;
+      }
     }
 
     pipelineCache.set(modelId, pipe);
