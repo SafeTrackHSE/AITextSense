@@ -13,6 +13,9 @@
 import { buildObjective, type ObjectiveResult } from '../oracle/optimizer';
 import { rewriteLocal } from '../llm/local';
 import { DEFAULT_LOCAL_MODEL } from '../llm/local';
+import { rewriteWithLLM, REWRITE_PROMPTS } from '../llm/client';
+import { neutralize } from '../watermark/neutralize';
+import type { LLMConfig } from '../llm/types';
 
 export interface RoundTripOptions {
   /** Candidates generated per sentence (best-of-N). Higher = stronger + slower. */
@@ -22,6 +25,8 @@ export interface RoundTripOptions {
   targetScore?: number;
   modelId?: string;
   onProgress?: (msg: string, percent: number) => void;
+  llmConfig?: LLMConfig & { enabled?: boolean };
+  appMode?: 'offline' | 'online';
 }
 
 export interface RoundTripResult {
@@ -91,21 +96,48 @@ export async function regenerateRoundTrip(
       let bestScore = objective(s.text).score;
 
       for (let n = 0; n < o.samplesPerSentence; n++) {
-        try {
-          const res = await rewriteLocal(trimmed, 'humanize', o.modelId);
-          if (!res.text || res.text.length < 10) continue;
-          const candidate = res.text + (/[.!?]\s*$/.test(res.text) ? ' ' : '. ');
-          // Cheap approximation: score the candidate alone plus a context tail.
-          const probe = current.slice(Math.max(0, s.offset - 200), s.offset) + candidate;
-          const sc = Math.max(objective(probe).score * 0.7, objective(candidate).score);
-          if (sc < bestScore) {
-            bestScore = sc;
-            bestText = candidate;
+        let candidateText = '';
+        const isOnlineConfig = (options.llmConfig?.enabled ?? true) &&
+          options.llmConfig &&
+          options.llmConfig.provider !== 'local' &&
+          (options.appMode === 'online' || options.llmConfig.provider === 'ollama' || options.llmConfig.provider === 'uncensored-offline');
+
+        if (isOnlineConfig && options.llmConfig) {
+          try {
+            const res = await rewriteWithLLM(trimmed, REWRITE_PROMPTS.humanize, options.llmConfig);
+            candidateText = res.text;
+          } catch {
+            // fall back to local or neutralize
           }
-        } catch {
-          // Model unavailable or sentence too odd to rewrite — keep original piece.
-          break;
         }
+
+        if (!candidateText) {
+          try {
+            const res = await rewriteLocal(trimmed, 'humanize', o.modelId);
+            candidateText = res.text;
+          } catch {
+            // fall back to neutralize
+          }
+        }
+
+        if (!candidateText || candidateText.length < 10) {
+          try {
+            const neut = neutralize(trimmed);
+            candidateText = neut.neutralized;
+          } catch {
+            // keep original
+          }
+        }
+
+        if (!candidateText || candidateText.length < 5) continue;
+        const candidate = candidateText + (/[.!?]\s*$/.test(candidateText) ? ' ' : '. ');
+        const probe = current.slice(Math.max(0, s.offset - 200), s.offset) + candidate;
+        const sc = Math.max(objective(probe).score * 0.7, objective(candidate).score);
+        if (sc < bestScore) {
+          bestScore = sc;
+          bestText = candidate;
+        }
+
         o.onProgress?.(
           `Round ${round}: sentence ${si + 1}/${sentences.length}`,
           Math.round(((round - 1) * sentences.length + si) / (o.maxRounds * sentences.length) * 100),

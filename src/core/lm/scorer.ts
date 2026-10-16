@@ -31,17 +31,31 @@ export interface LMScanResult {
 }
 
 /**
- * Human baseline calibration constants for windowed GPT-2-small NLL on
- * natural human prose (~64-token windows): mean ≈ 3.85 nats/token,
- * σ across windows ≈ 0.62. Tunable — recalibrate from the UI later.
+ * Human baseline calibration constants for windowed Causal LM NLL on
+ * natural human prose (~64-token windows).
  */
-export const HUMAN_BASELINE = {
-  meanNll: 3.85,
-  stdNll: 0.62,
+export const MODEL_BASELINES: Record<string, { meanNll: number; stdNll: number }> = {
+  'Xenova/gpt2': {
+    meanNll: 3.85,
+    stdNll: 0.62,
+  },
+  'onnx-community/SmolLM2-135M-ONNX': {
+    meanNll: 3.45,
+    stdNll: 0.58,
+  },
 };
+
+export const HUMAN_BASELINE = MODEL_BASELINES['Xenova/gpt2'];
 
 type CacheEntry = { tokenizer: unknown; model: unknown };
 const lmCache = new Map<string, Promise<CacheEntry>>();
+
+export async function loadScorer(
+  modelId: 'onnx-community/SmolLM2-135M-ONNX' | 'Xenova/gpt2' | string = 'Xenova/gpt2',
+  onProgress?: ProgressFn,
+): Promise<CacheEntry> {
+  return getLM(modelId, onProgress);
+}
 
 async function getLM(
   modelId = 'Xenova/gpt2',
@@ -120,7 +134,9 @@ export async function scoreWithLM(
     ) => Promise<{ logits: { data: Float32Array; dims: number[] } }>;
     const out = await modelFn(inputs as unknown as Record<string, unknown>);
 
-    const [seqLen, vocabSize] = [out.logits.dims[0], out.logits.dims[2]];
+    const dims = out.logits.dims;
+    const vocabSize = dims[dims.length - 1];
+    const seqLen = dims.length === 3 ? (dims[0] === 1 ? dims[1] : dims[0]) : dims[0];
     let nllSum = 0;
     let count = 0;
     // Shift: token t predicted from logits row t-1.
@@ -140,7 +156,7 @@ export async function scoreWithLM(
       count++;
     }
 
-    const meanNll = nllSum / count;
+    const meanNll = count > 0 ? nllSum / count : 0;
     windows.push({
       startToken: ws,
       endToken: we,
@@ -155,15 +171,16 @@ export async function scoreWithLM(
   }
 
   const nlls = windows.map(w => w.meanNll);
-  const mean = nlls.reduce((a, b) => a + b, 0) / nlls.length;
-  const variance = nlls.reduce((a, b) => a + (b - mean) ** 2, 0) / nlls.length;
+  const mean = nlls.length > 0 ? nlls.reduce((a, b) => a + b, 0) / nlls.length : 0;
+  const variance = nlls.length > 0 ? nlls.reduce((a, b) => a + (b - mean) ** 2, 0) / nlls.length : 0;
   const std = Math.sqrt(variance);
   const uniformity = std > 0 ? 1 / (1 + std) : 1;
 
   // Distance from human manifold: penalize BOTH too-flat curves AND
   // absolute mismatch with human NLL statistics.
-  const meanGap = Math.abs(mean - HUMAN_BASELINE.meanNll) / HUMAN_BASELINE.stdNll;
-  const stdRatio = std / HUMAN_BASELINE.stdNll;
+  const baseline = MODEL_BASELINES[options.modelId ?? 'Xenova/gpt2'] ?? HUMAN_BASELINE;
+  const meanGap = Math.abs(mean - baseline.meanNll) / baseline.stdNll;
+  const stdRatio = std / baseline.stdNll;
   const stdPenalty = stdRatio < 1 ? 1 - stdRatio : 0; // flatter than human = machine-ish
   const humanDistance = meanGap * 0.5 + stdPenalty * 1.2 + (uniformity > 0.7 ? (uniformity - 0.7) * 2 : 0);
   const machineLikelihood = Math.min(1, Math.max(0, humanDistance));
@@ -181,3 +198,5 @@ export async function scoreWithLM(
     durationMs: performance.now() - start,
   };
 }
+
+export const scorePerplexity = scoreWithLM;

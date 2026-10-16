@@ -1,7 +1,7 @@
 [package]
 name = "aitextsense"
-version = "2.1.0"
-description = "AI TextSense v2.1 — Forensic Text & Prompt Injection Inspector"
+version = "3.0.0"
+description = "AI TextSense — Forensic Text & Prompt Injection Inspector"
 authors = ["AI TextSense"]
 edition = "2021"
 

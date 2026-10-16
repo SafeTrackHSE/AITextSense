@@ -9,7 +9,7 @@
  * Every candidate edit is scored BEFORE commitment. No blind intensity
  * fractions — only edits with measurable detectability reduction survive.
  */
-import { detectWatermark } from '../watermark/detection';
+import { detectWatermark, sweepDetection } from '../watermark/detection';
 import { getSynonymAlternatives } from '../watermark/synonyms';
 import { analyzeFootprint } from '../footprint/analysis';
 
@@ -104,19 +104,17 @@ export function buildObjective(opts: Required<Pick<OptimizerOptions, 'watermarkC
 } {
   let lockedConfigs = opts.lockedConfigs ?? [];
   if (lockedConfigs.length === 0 && opts.watermarkConfigs > 0) {
-    // Lock onto the strongest watermark signals present in ANY input later;
-    // here we just expose the standard probe grid for lazy locking.
-    lockedConfigs = [{ gamma: 0.5, windowSize: 1, hashKey: 42 }];
-  }
-
-  const watermarkObjective: Objective = (text) => {
-    if (opts.watermarkConfigs === 0) return { score: 0, details: {} };
-    // Probe the standard adversarial grid cheaply: fixed strong configs.
-    const probes = [
+    // Fallback standard probe grid
+    lockedConfigs = [
       { gamma: 0.5, windowSize: 1, hashKey: 42 },
       { gamma: 0.25, windowSize: 1, hashKey: 0 },
       { gamma: 0.5, windowSize: 2, hashKey: 137 },
     ];
+  }
+
+  const watermarkObjective: Objective = (text) => {
+    if (opts.watermarkConfigs === 0) return { score: 0, details: {} };
+    const probes = lockedConfigs;
     let worst = 0;
     const details: Record<string, number> = {};
     for (const p of probes) {
@@ -272,8 +270,27 @@ export function optimize(
     ...options,
   };
 
+  let lockedConfigs: Array<{ gamma: number; windowSize: number; hashKey: number }> = [];
+  if (o.watermarkConfigs > 0) {
+    const initialSweep = sweepDetection(text);
+    const detected = initialSweep.results.filter(r => r.isSignificant || r.zScore > 2.0);
+    if (detected.length > 0) {
+      lockedConfigs = detected.slice(0, o.watermarkConfigs).map(r => ({
+        gamma: r.gamma,
+        windowSize: r.windowSize,
+        hashKey: r.hashKey,
+      }));
+    } else if (initialSweep.bestResult) {
+      lockedConfigs = [{
+        gamma: initialSweep.bestResult.gamma,
+        windowSize: initialSweep.bestResult.windowSize,
+        hashKey: initialSweep.bestResult.hashKey,
+      }];
+    }
+  }
+
   const start = performance.now();
-  const { objective } = buildObjective(o);
+  const { objective } = buildObjective({ ...o, lockedConfigs });
 
   const before = objective(text);
   let current = text;
@@ -361,3 +378,5 @@ export function optimize(
     summary,
   };
 }
+
+export const optimizeText = optimize;

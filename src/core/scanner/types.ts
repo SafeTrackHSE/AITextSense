@@ -24,6 +24,8 @@ export interface CharFinding {
   risk: RiskLevel;
   byteOffset: number;
   charOffset: number;
+  codePointOffset?: number;
+  utf16Offset?: number;
   graphemeIndex: number;
   safeToRemove: boolean;
   description: string;

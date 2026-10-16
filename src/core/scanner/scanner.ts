@@ -54,9 +54,13 @@ export function scan(text: string, options: Partial<ScanOptions> = {}): ScanResu
 
   const cpArray: number[] = [];
   const cpChars: string[] = [];
+  const utf16Offsets: number[] = [];
+  let utf16Pos = 0;
   for (const ch of text) {
     cpArray.push(ch.codePointAt(0)!);
     cpChars.push(ch);
+    utf16Offsets.push(utf16Pos);
+    utf16Pos += ch.length;
   }
   const cpLen = cpArray.length;
 
@@ -87,12 +91,13 @@ export function scan(text: string, options: Partial<ScanOptions> = {}): ScanResu
     const cp = cpArray[i];
     const char = cpChars[i];
     const currentByteOffset = byteOffsets[i];
+    const currentUtf16Offset = utf16Offsets[i];
 
     if (isVariationSelector(cp) && opts.enabledClasses.has('variation-selector')) {
       const vsDef = getVariationSelectorDef(cp);
       findings.push(makeFinding(char, cp, 'variation-selector', vsDef.risk,
         vsDef.safeToRemove, vsDef.name, vsDef.description,
-        currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i));
+        currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i, currentUtf16Offset));
     } else if (isCombiningMark(cp)) {
       continue;
     } else if (cp === 0x200d && isZwjInEmojiSequence(cpArray, i)) {
@@ -102,18 +107,18 @@ export function scan(text: string, options: Partial<ScanOptions> = {}): ScanResu
       if (classDef && opts.enabledClasses.has(classDef.charClass)) {
         findings.push(makeFinding(char, cp, classDef.charClass, classDef.risk,
           classDef.safeToRemove, classDef.name, classDef.description,
-          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i));
+          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i, currentUtf16Offset));
       } else if (isTagChar(cp) && opts.enabledClasses.has('tag-char')) {
         const tagDef = getTagCharDef(cp);
         findings.push(makeFinding(char, cp, 'tag-char', tagDef.risk,
           tagDef.safeToRemove, tagDef.name, tagDef.description,
-          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i));
+          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i, currentUtf16Offset));
       } else if (opts.enabledClasses.has('homoglyph') && CONFUSABLES.has(cp)) {
         const conf = CONFUSABLES.get(cp)!;
         findings.push(makeFinding(char, cp, 'homoglyph', 'security', false,
           `CONFUSABLE: ${String.fromCodePoint(cp)} → ${String.fromCodePoint(conf.target)}`,
           `Looks like ${conf.targetScript} '${String.fromCodePoint(conf.target)}' but is ${getScript(cp)}`,
-          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i));
+          currentByteOffset, i, graphemeMap.get(i) ?? i, cpChars, i, currentUtf16Offset));
       }
     }
 
@@ -172,6 +177,7 @@ function makeFinding(
   safeToRemove: boolean, name: string, description: string,
   byteOffset: number, charOffset: number, graphemeIndex: number,
   cpChars: string[], idx: number,
+  utf16Offset?: number,
 ): CharFinding {
   const ctxStart = Math.max(0, idx - 5);
   const ctxEnd = Math.min(cpChars.length, idx + 6);
@@ -181,9 +187,26 @@ function makeFinding(
     char, codePoint: cp,
     codePointHex: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`,
     name, category: getGeneralCategory(cp), script: getScript(cp),
-    charClass, risk, byteOffset, charOffset, graphemeIndex,
+    charClass, risk, byteOffset, charOffset,
+    codePointOffset: charOffset,
+    utf16Offset: utf16Offset ?? charOffset,
+    graphemeIndex,
     safeToRemove, description, context,
   };
+}
+
+function decodeBitsToAscii(bits: string): string | null {
+  if (bits.length < 8) return null;
+  const bytes: number[] = [];
+  for (let i = 0; i + 7 < bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  try {
+    const raw = new Uint8Array(bytes);
+    const t = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    if (/^[\x20-\x7e\r\n\t]+$/.test(t) && t.length > 0) return t;
+  } catch { /* not valid UTF-8 text */ }
+  return null;
 }
 
 function decodeStegoRun(run: number[], startOffset: number, endOffset: number): StegoPattern {
@@ -192,16 +215,17 @@ function decodeStegoRun(run: number[], startOffset: number, endOffset: number): 
   };
   const bits = run.map(cp => bitMap[cp] ?? '').join('');
 
-  let decoded: string | null = null;
-  try {
-    const bytes: number[] = [];
-    for (let i = 0; i + 7 < bits.length; i += 8) {
-      bytes.push(parseInt(bits.slice(i, i + 8), 2));
-    }
-    const raw = new Uint8Array(bytes);
-    const t = new TextDecoder('utf-8', { fatal: true }).decode(raw);
-    if (/^[\x20-\x7e]+$/.test(t)) decoded = t;
-  } catch { /* not valid UTF-8 text */ }
+  let decoded: string | null = decodeBitsToAscii(bits);
+
+  if (!decoded) {
+    const bits1 = run.map(cp => (cp === 0x200b ? '0' : cp === 0x200c ? '1' : '')).join('');
+    decoded = decodeBitsToAscii(bits1);
+  }
+
+  if (!decoded) {
+    const bitsInv = run.map(cp => (cp === 0x200c ? '0' : cp === 0x200b ? '1' : '')).join('');
+    decoded = decodeBitsToAscii(bitsInv);
+  }
 
   return {
     startOffset, endOffset,

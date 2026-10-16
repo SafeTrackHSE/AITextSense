@@ -8,8 +8,11 @@
  * Built for non-technical users: everything reports human-readable progress,
  * and failures return plain-language guidance.
  */
-import type { LLMResponse } from './types';
+import type { LLMResponse, LLMConfig } from './types';
+import { LOCAL_MODELS, LOCAL_AUX_MODELS, type LocalModelOption } from './types';
 import type { RewriteMode } from '../rewrite/types';
+
+export { LOCAL_MODELS, LOCAL_AUX_MODELS, type LocalModelOption };
 
 /**
  * Short, T5-style task prefixes. Small instruction models (LaMini-Flan-T5)
@@ -21,29 +24,6 @@ const LOCAL_TASKS: Record<RewriteMode, string> = {
   deparaphrase: 'Rewrite the following text using different words and sentence structure: ',
   neutralize: 'Rewrite the following text more simply and vary the sentence structure: ',
 };
-
-/** Curated small models — kept intentionally short so the picker isn't overwhelming. */
-export interface LocalModelOption {
-  id: string;
-  label: string;
-  approxSizeMb: number;
-  blurb: string;
-}
-
-export const LOCAL_MODELS: LocalModelOption[] = [
-  {
-    id: 'Xenova/LaMini-Flan-T5-77M',
-    label: 'Fast (77M)',
-    approxSizeMb: 80,
-    blurb: 'Smallest and quickest. Good for light rewrites on any machine.',
-  },
-  {
-    id: 'Xenova/LaMini-Flan-T5-248M',
-    label: 'Better (248M)',
-    approxSizeMb: 250,
-    blurb: 'Larger download, noticeably stronger rewrites. Needs a bit more memory.',
-  },
-];
 
 export const DEFAULT_LOCAL_MODEL = LOCAL_MODELS[0].id;
 
@@ -58,7 +38,17 @@ export interface LocalProgress {
   message: string;
 }
 
-export type ProgressFn = (p: LocalProgress) => void;
+export type ProgressFn = (p: any, status?: string) => void;
+
+function notifyProgress(onProgress: ProgressFn | undefined, status: LocalLoadStatus, percent: number, message: string) {
+  if (!onProgress) return;
+  const p: LocalProgress = { status, percent, message };
+  if (onProgress.length >= 2) {
+    (onProgress as (progress: number, status: string) => void)(percent, message);
+  } else {
+    (onProgress as (p: LocalProgress) => void)(p);
+  }
+}
 
 // One cached pipeline per model id, plus the in-flight promise to dedupe loads.
 const pipelineCache = new Map<string, unknown>();
@@ -66,7 +56,20 @@ const loadingPromises = new Map<string, Promise<unknown>>();
 
 /** True when this browser exposes WebGPU (much faster than the WASM fallback). */
 export function hasWebGPU(): boolean {
-  return typeof navigator !== 'undefined' && 'gpu' in navigator;
+  return typeof navigator !== 'undefined' && 'gpu' in navigator && !!(navigator as any).gpu;
+}
+
+/** Detect hardware acceleration capability. */
+export async function detectHardwareAcceleration(): Promise<'webgpu' | 'wasm'> {
+  if (hasWebGPU()) {
+    try {
+      const adapter = await (navigator as any).gpu.requestAdapter();
+      if (adapter) return 'webgpu';
+    } catch {
+      // fallback to wasm
+    }
+  }
+  return 'wasm';
 }
 
 /** Whether a model is already downloaded + ready in this session. */
@@ -74,7 +77,7 @@ export function isModelReady(modelId: string): boolean {
   return pipelineCache.has(modelId);
 }
 
-async function getPipeline(modelId: string, onProgress?: ProgressFn): Promise<unknown> {
+export async function getPipeline(modelId: string, onProgress?: ProgressFn): Promise<unknown> {
   if (pipelineCache.has(modelId)) return pipelineCache.get(modelId);
   if (loadingPromises.has(modelId)) return loadingPromises.get(modelId);
 
@@ -92,25 +95,30 @@ async function getPipeline(modelId: string, onProgress?: ProgressFn): Promise<un
         fileProgress.set(data.file, data.progress ?? 0);
         const vals = [...fileProgress.values()];
         const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-        onProgress?.({ status: 'downloading', percent: Math.round(avg), message: `Downloading model (${Math.round(avg)}%)` });
+        notifyProgress(onProgress, 'downloading', Math.round(avg), `Downloading model (${Math.round(avg)}%)`);
       } else if (data.status === 'done' || data.status === 'ready') {
-        onProgress?.({ status: 'preparing', percent: 100, message: 'Preparing model…' });
+        notifyProgress(onProgress, 'preparing', 100, 'Preparing model…');
       }
     };
 
     const device = hasWebGPU() ? 'webgpu' : 'wasm';
-    onProgress?.({ status: 'downloading', percent: 0, message: 'Starting download…' });
+    notifyProgress(onProgress, 'downloading', 0, 'Starting download…');
+
+    const modelOption = LOCAL_MODELS.find(m => m.id === modelId);
+    const isTextGen = modelOption?.pipelineTask === 'text-generation';
+    const task = isTextGen ? 'text-generation' : 'text2text-generation';
+    const dtype = modelOption?.dtype ?? (isTextGen ? 'q4' : 'q8');
 
     let pipe: unknown;
     try {
-      pipe = await pipeline('text2text-generation', modelId, { device, progress_callback });
+      pipe = await pipeline(task as any, modelId, { device, dtype: dtype as any, progress_callback });
     } catch {
       // WebGPU can fail on some webviews (e.g. macOS Tauri) — fall back to WASM.
-      pipe = await pipeline('text2text-generation', modelId, { device: 'wasm', progress_callback });
+      pipe = await pipeline(task as any, modelId, { device: 'wasm', dtype: dtype as any, progress_callback });
     }
 
     pipelineCache.set(modelId, pipe);
-    onProgress?.({ status: 'ready', percent: 100, message: 'Model ready — runs on your device.' });
+    notifyProgress(onProgress, 'ready', 100, 'Model ready — runs on your device.');
     return pipe;
   })();
 
@@ -167,11 +175,12 @@ export async function preloadLocalModel(modelId: string, onProgress?: ProgressFn
   try {
     await getPipeline(modelId, onProgress);
   } catch (err) {
-    onProgress?.({
-      status: 'error',
-      percent: 0,
-      message: `Could not load the model. Check your internet connection and try again. (${err instanceof Error ? err.message : String(err)})`,
-    });
+    notifyProgress(
+      onProgress,
+      'error',
+      0,
+      `Could not load the model. Check your internet connection and try again. (${err instanceof Error ? err.message : String(err)})`,
+    );
     throw err;
   }
 }
@@ -187,14 +196,50 @@ export async function rewriteLocal(
   onProgress?: ProgressFn,
 ): Promise<LLMResponse> {
   const start = performance.now();
-  const pipe = (await getPipeline(modelId, onProgress)) as (
-    input: string, opts: Record<string, unknown>
-  ) => Promise<Array<{ generated_text: string }>>;
+  const pipe = await getPipeline(modelId, onProgress);
+  const modelOption = LOCAL_MODELS.find(m => m.id === modelId);
 
-  onProgress?.({ status: 'ready', percent: 100, message: 'Rewriting on your device…' });
+  notifyProgress(onProgress, 'ready', 100, 'Rewriting on your device…');
 
-  // Small T5 models handle one sentence at a time far better than a whole
-  // paragraph, so rewrite sentence-by-sentence and rejoin.
+  // Causal Instruct models (SmolLM2-360M, Qwen2.5-0.5B)
+  if (modelOption?.pipelineTask === 'text-generation') {
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are an expert humanizing editor. Rewrite the following text to sound completely natural, engaging, and human-written. Eliminate all repetitive rhythm, buzzwords, and AI clichés. Return ONLY the rewritten text.',
+      },
+      {
+        role: 'user',
+        content: `${LOCAL_TASKS[mode]}${text}`,
+      },
+    ];
+
+    const output = await (pipe as any)(messages, {
+      max_new_tokens: 512,
+      temperature: 0.2,
+      do_sample: false,
+      return_full_text: false,
+    });
+
+    let rawText = '';
+    if (Array.isArray(output) && output.length > 0) {
+      const item = output[0];
+      if (typeof item?.generated_text === 'string') {
+        rawText = item.generated_text;
+      } else if (Array.isArray(item?.generated_text)) {
+        const last = item.generated_text[item.generated_text.length - 1];
+        rawText = last?.content ?? '';
+      } else if (item?.content) {
+        rawText = item.content;
+      }
+    }
+
+    let out = rawText.trim()
+      .replace(/^(?:paraphrase|rewrite)[^:]*:\s*/i, '');
+    return { text: out.trim() || text, tokensUsed: 0, durationMs: performance.now() - start };
+  }
+
+  // Seq2Seq models (LaMini-Flan-T5-77M, 248M) handle one sentence at a time
   const task = LOCAL_TASKS[mode];
   const sentences = text.match(/[^.!?]+[.!?]*\s*/g) ?? [text];
   const rewritten: string[] = [];
@@ -204,7 +249,7 @@ export async function rewriteLocal(
     if (trimmed.length < 3) { rewritten.push(s); continue; }
     const approxWords = trimmed.split(/\s+/).length;
     const maxNewTokens = Math.min(256, Math.max(32, Math.round(approxWords * 2)));
-    const output = await pipe(task + trimmed, {
+    const output = await (pipe as any)(task + trimmed, {
       max_new_tokens: maxNewTokens,
       temperature: 0.7,
       do_sample: true,
@@ -220,4 +265,96 @@ export async function rewriteLocal(
   out = out.replace(/paraphrase the following text[^:]*:\s*/i, '')
            .replace(/rewrite the following text[^:]*:\s*/i, '');
   return { text: out.trim(), tokensUsed: 0, durationMs: performance.now() - start };
+}
+
+/**
+ * Generate freeform or instruction-driven text on-device using a local model.
+ */
+export async function generateLocal(
+  prompt: string,
+  modelId: string,
+  options: { max_new_tokens?: number; temperature?: number } = {},
+): Promise<string> {
+  const pipe = await getPipeline(modelId);
+  const modelOption = LOCAL_MODELS.find(m => m.id === modelId);
+
+  if (modelOption?.pipelineTask === 'text-generation') {
+    const messages = [
+      { role: 'user', content: prompt },
+    ];
+    const output = await (pipe as any)(messages, {
+      max_new_tokens: options.max_new_tokens ?? 512,
+      temperature: options.temperature ?? 0.2,
+      do_sample: false,
+      return_full_text: false,
+    });
+    if (Array.isArray(output) && output.length > 0) {
+      const item = output[0];
+      if (typeof item?.generated_text === 'string') return item.generated_text;
+      if (Array.isArray(item?.generated_text)) {
+        const last = item.generated_text[item.generated_text.length - 1];
+        return last?.content ?? '';
+      }
+      if (item?.content) return item.content;
+    }
+    return '';
+  } else {
+    const output = await (pipe as any)(prompt, {
+      max_new_tokens: options.max_new_tokens ?? 256,
+      temperature: options.temperature ?? 0.2,
+      do_sample: false,
+    });
+    if (Array.isArray(output) && output.length > 0) {
+      return output[0]?.generated_text ?? '';
+    }
+    return '';
+  }
+}
+
+function tryParseLocalJSON<T>(raw: string): T | null {
+  const trimmed = raw.trim();
+  const unfenced = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  try {
+    return JSON.parse(unfenced) as T;
+  } catch {
+    const match = unfenced.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]) as T; } catch { /* fall through */ }
+    }
+    return null;
+  }
+}
+
+export async function generateLocalJSON<T>(
+  systemPrompt: string,
+  userContent: string,
+  config: LLMConfig,
+  spec: { schema: Record<string, unknown> },
+): Promise<{ data: T | null; raw: string; parseError: boolean; declinedTool: boolean; error?: string; durationMs: number }> {
+  const start = performance.now();
+  const prompt = `${systemPrompt}\n\nRespond ONLY with a single valid JSON object matching this schema: ${JSON.stringify(spec.schema)}\n\n${userContent}`;
+
+  try {
+    const raw = await generateLocal(prompt, config.model, {
+      max_new_tokens: config.maxTokens ?? 512,
+      temperature: config.temperature ?? 0.2,
+    });
+    const data = tryParseLocalJSON<T>(raw);
+    return {
+      data,
+      raw,
+      parseError: data === null,
+      declinedTool: false,
+      durationMs: performance.now() - start,
+    };
+  } catch (err) {
+    return {
+      data: null,
+      raw: '',
+      parseError: false,
+      declinedTool: false,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: performance.now() - start,
+    };
+  }
 }

@@ -3,6 +3,9 @@ import { useStore } from '../store';
 import HelpModal from './HelpModal';
 import { useT, LANGUAGES, type Language } from '../i18n';
 import logoImg from '../assets/AITextSense_Logo.png';
+import horizontalLogo from '../assets/AITextSense_Horizontal.png';
+import { APP_VERSION, APP_TAGLINE } from '../version';
+import { isModelReady } from '../core/llm/local';
 
 const HELP_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -13,9 +16,8 @@ const HELP_ICON = (
 );
 
 export default function Header() {
-  const { darkMode, toggleDarkMode, appMode, setAppMode, reset, uiLanguage, setUiLanguage } = useStore();
+  const { darkMode, toggleDarkMode, appMode, setAppMode, reset, uiLanguage, setUiLanguage, helpOpen, openHelp, closeHelp, llmConfig } = useStore();
   const t = useT();
-  const [helpOpen, setHelpOpen] = useState(false);
   const [isTauri, setIsTauri] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -125,6 +127,9 @@ export default function Header() {
     }
   };
 
+  const isCloudActive = appMode === 'online' && ['openai', 'anthropic', 'gemini'].includes(llmConfig.provider);
+  const isLocalAIReady = (appMode === 'offline' || llmConfig.provider === 'local') && (isModelReady(llmConfig.model) || llmConfig.provider === 'local');
+
   return (
     <>
       <header
@@ -136,19 +141,24 @@ export default function Header() {
           <div data-tauri-drag-region className="relative flex items-center justify-center pointer-events-none">
             <img
               src={logoImg}
-              alt="AI TextSense"
+              alt="AI TextSense Logo"
               className="w-7 h-7 rounded-md object-contain shadow-sm border border-slate-700/40"
               data-tauri-drag-region
             />
           </div>
-          <div data-tauri-drag-region className="flex items-baseline gap-2 min-w-0 pointer-events-none">
-            <h1 data-tauri-drag-region className="text-sm font-semibold tracking-tight text-ink dark:text-ink-dark font-mono uppercase shrink-0">
-              AI TextSense
-            </h1>
-            <span data-tauri-drag-region className="text-[11px] text-ink-muted dark:text-ink-dark-muted font-mono shrink-0">|</span>
-            <span data-tauri-drag-region className="text-[11px] text-ink-muted dark:text-ink-dark-muted font-mono truncate">Forensic Text & Prompt Injection Inspector</span>
-            <span data-tauri-drag-region className="text-[10px] text-ink-faint dark:text-ink-dark-faint font-mono shrink-0">v2.1</span>
-            <span data-tauri-drag-region className="text-[10px] text-ink-faint dark:text-ink-dark-faint font-mono opacity-70 shrink-0">© Wilson Volpe</span>
+          <div data-tauri-drag-region className="flex items-center gap-2 min-w-0 pointer-events-none">
+            <img
+              src={horizontalLogo}
+              alt="AI TextSense"
+              className="h-5 w-auto object-contain brightness-95 dark:brightness-105 shrink-0"
+              data-tauri-drag-region
+            />
+            <span data-tauri-drag-region className="text-[11px] text-ink-muted dark:text-ink-dark-muted font-mono hidden md:inline shrink-0">|</span>
+            <span data-tauri-drag-region className="text-[11px] text-ink-muted dark:text-ink-dark-muted font-mono truncate hidden lg:inline">{APP_TAGLINE}</span>
+            <span data-tauri-drag-region className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-accent/15 text-accent border border-accent/30 shrink-0">
+              v{APP_VERSION}
+            </span>
+            <span data-tauri-drag-region className="text-[10px] text-ink-faint dark:text-ink-dark-faint font-mono opacity-70 shrink-0 hidden sm:inline">© Wilson Volpe</span>
           </div>
         </div>
 
@@ -157,6 +167,32 @@ export default function Header() {
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* 3-State Privacy Status Badge */}
+          <div
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-mono font-semibold border transition-all ${
+              isCloudActive
+                ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30'
+                : isLocalAIReady
+                  ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30'
+                  : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+            }`}
+            title={
+              isCloudActive
+                ? 'Cloud API provider active for AI reasoning'
+                : isLocalAIReady
+                  ? 'On-Device AI ready — 100% private local model inference'
+                  : 'Air-Gapped mode active — zero network requests, pure client-side deterministic algorithms'
+            }
+          >
+            <span>
+              {isCloudActive
+                ? t('privacy.cloudActive')
+                : isLocalAIReady
+                  ? t('privacy.localAI')
+                  : t('privacy.airGapped')}
+            </span>
+          </div>
+
           {/* Mode toggle */}
           <div className="flex bg-panel dark:bg-panel-dark border border-border dark:border-border-dark rounded p-0.5 gap-0.5">
             {(['offline', 'online'] as const).map(mode => (
@@ -165,9 +201,9 @@ export default function Header() {
                 type="button"
                 id={`mode-${mode}`}
                 onClick={() => setAppMode(mode)}
-                className={`px-3 py-1 text-xs font-medium rounded transition-all duration-150 ${
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-all duration-150 ${
                   appMode === mode
-                    ? 'bg-accent text-white shadow-sm'
+                    ? 'bg-accent text-white shadow-sm font-semibold'
                     : 'text-ink-muted dark:text-ink-dark-muted hover:text-ink dark:hover:text-ink-dark'
                 }`}
               >
@@ -193,7 +229,7 @@ export default function Header() {
           <button
             type="button"
             id="open-help"
-            onClick={() => setHelpOpen(true)}
+            onClick={() => openHelp()}
             title={t('action.help')}
             className="w-8 h-8 flex items-center justify-center rounded hover:bg-panel dark:hover:bg-panel-dark transition-colors duration-150 text-ink-muted dark:text-ink-dark-muted hover:text-accent dark:hover:text-accent focus:outline-none"
             aria-label="Open help"
@@ -283,7 +319,7 @@ export default function Header() {
         </div>
       </header>
 
-      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <HelpModal open={helpOpen} onClose={closeHelp} />
     </>
   );
 }

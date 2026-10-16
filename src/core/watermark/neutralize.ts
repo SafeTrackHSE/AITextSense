@@ -2,7 +2,7 @@ import type {
   NeutralizationResult, NeutralizationOptions, NeutralizationSuggestion,
 } from './types';
 import { DEFAULT_NEUTRALIZATION_OPTIONS } from './types';
-import { detectWatermark, isGreenList, computeTokenHash } from './detection';
+import { detectWatermark, isGreenList, computeTokenHash, sweepDetection } from './detection';
 import { getSynonymAlternatives } from './synonyms';
 import { simpleTokenize, wordTokenize } from './tokenizer';
 
@@ -32,18 +32,51 @@ const HOMOGLYPH_MAP: Record<string, string> = {
 // Max iterations for the neutralization convergence loop.
 const MAX_ITERATIONS = 5;
 
+export interface ExtendedNeutralizationOptions extends NeutralizationOptions {
+  gamma?: number;
+  hashKey?: number;
+  key?: number;
+  windowSize?: number;
+  ngramLength?: number;
+}
+
 export function neutralize(
   text: string,
-  options: Partial<NeutralizationOptions> = {},
+  options: Partial<ExtendedNeutralizationOptions> = {},
 ): NeutralizationResult {
   const start = performance.now();
   const opts = { ...DEFAULT_NEUTRALIZATION_OPTIONS, ...options };
 
-  const beforeResult = detectWatermark(text);
-  const beforeZScore = beforeResult.zScore;
-  const detectedGamma = beforeResult.gamma;
-  const detectedKey = beforeResult.hashKey;
-  const detectedWindow = beforeResult.windowSize;
+  const explicitKey = options.key ?? options.hashKey;
+  const explicitWindow = options.ngramLength ?? options.windowSize;
+  const explicitGamma = options.gamma;
+
+  let detectedGamma: number;
+  let detectedKey: number;
+  let detectedWindow: number;
+  let beforeZScore: number;
+
+  if (explicitKey !== undefined || explicitWindow !== undefined || explicitGamma !== undefined) {
+    detectedKey = explicitKey ?? 42;
+    detectedWindow = explicitWindow ?? 1;
+    detectedGamma = explicitGamma ?? 0.5;
+    const beforeResult = detectWatermark(text, {
+      gamma: detectedGamma,
+      hashKey: detectedKey,
+      windowSize: detectedWindow,
+    });
+    beforeZScore = beforeResult.zScore;
+  } else {
+    const sweep = sweepDetection(text);
+    const defaultDetect = detectWatermark(text);
+    const chosen = (sweep.bestResult && sweep.bestResult.zScore > defaultDetect.zScore)
+      ? sweep.bestResult
+      : (sweep.bestResult ?? defaultDetect);
+    detectedGamma = chosen.gamma;
+    detectedKey = chosen.hashKey;
+    detectedWindow = chosen.windowSize;
+    beforeZScore = chosen.zScore;
+  }
 
   const allSuggestions: NeutralizationSuggestion[] = [];
   let result = text;
@@ -92,7 +125,11 @@ export function neutralize(
     if (modified === text && iterations === 1) break;
   }
 
-  const afterResult = detectWatermark(result);
+  const afterResult = detectWatermark(result, {
+    gamma: detectedGamma,
+    hashKey: detectedKey,
+    windowSize: detectedWindow,
+  });
   const afterZScore = afterResult.zScore;
 
   return {

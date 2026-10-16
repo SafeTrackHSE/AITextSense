@@ -34,23 +34,14 @@ const INJECTION_SIGNATURES: SignatureRule[] = [
     description: 'Invokes known jailbreak frameworks designed to disable safety filters.',
     mitigation: 'Filter out known jailbreak archetypes and inspect decoded payloads.',
   },
-  {
-    id: 'SIG-DATA-EXFIL',
-    name: 'Exfiltration & Secret Leakage Command',
-    pattern: /(?:output\s+(?:the\s+)?(?:secret|password|api[_\s-]?key|system\s+prompt|context)|send\s+(?:data|cookies|tokens)\s+to\s+https?:\/\/|fetch\(['"`]https?:\/\/|leak\s+the\s+prompt)/i,
-    severity: 'CRITICAL',
-    description: 'Instructions commanding the LLM or tool agent to exfiltrate private system data or API tokens.',
-    mitigation: 'Block external outbound webhook patterns in input streams.',
-  },
-  {
-    id: 'SIG-CODE-EXEC',
-    name: 'Adversarial Shell / Code Execution Prompt',
-    pattern: /(?:execute\s+(?:the\s+following\s+)?(?:bash|shell|powershell|cmd|command)|rm\s+-rf\s+\/|format\s+c:|eval\(|child_process)/i,
-    severity: 'HIGH',
-    description: 'Directs autonomous code-interpreter agents to execute destructive or unverified shell commands.',
-    mitigation: 'Run code execution in an ephemeral sandbox and strip hidden instructions.',
-  },
 ];
+
+// SIG-DATA-EXFIL and SIG-CODE-EXEC were migrated to core/threat/signatures.ts
+// (THR-NET-ENCODED-EXFIL-POST, THR-FS-RECURSIVE-DELETE, THR-FS-DISK-WIPE,
+// THR-PROC-DYNAMIC-EXEC, THR-NET-PIPE-EXEC and related) — those are about
+// code-execution/exfiltration danger, not covert-channel/jailbreak-trigger
+// detection, so they belong in the Threat module, which also runs
+// unconditionally rather than gated behind a payload already being found here.
 
 export function evaluateHeuristicSignatures(
   payloads: DecodedPayload[],
@@ -79,24 +70,29 @@ export function evaluateHeuristicSignatures(
     }
   }
 
-  // Also check if visible text contains high-risk delimiters combined with suspicious chars
-  if (payloads.length > 0) {
-    for (const sig of INJECTION_SIGNATURES) {
-      const match = sig.pattern.exec(fullText);
-      if (match && !findings.some(f => f.ruleId === sig.id)) {
-        findings.push({
-          id: `${sig.id}-visible`,
-          ruleId: sig.id,
-          vector: payloads[0].vector,
-          title: `Coordinated Attack: ${sig.name}`,
-          severity: sig.severity,
-          description: `Visible text contains injection trigger words while paired with ${payloads.length} invisible payload(s).`,
-          snippet: match[0],
-          extractedCommand: match[0],
-          mitigation: sig.mitigation,
-        });
-      }
-    }
+  // Scan the visible text for injection trigger phrases unconditionally — a plain-text
+  // "ignore all previous instructions" prompt with no invisible Unicode payload must
+  // still score above CLEAN. This used to be gated on `payloads.length > 0`, which meant
+  // the single most common form of prompt injection (plain visible text, no covert
+  // channel at all) was never actually detected. See plan §1.1 / §5.1.
+  for (const sig of INJECTION_SIGNATURES) {
+    const match = sig.pattern.exec(fullText);
+    if (!match || findings.some(f => f.ruleId === sig.id)) continue;
+
+    const coordinated = payloads.length > 0;
+    findings.push({
+      id: `${sig.id}-visible`,
+      ruleId: sig.id,
+      vector: coordinated ? payloads[0].vector : 'plain-text-trigger',
+      title: coordinated ? `Coordinated Attack: ${sig.name}` : sig.name,
+      severity: sig.severity,
+      description: coordinated
+        ? `Visible text contains injection trigger words while paired with ${payloads.length} invisible payload(s).`
+        : `Visible text contains an injection trigger phrase directly, with no invisible Unicode payload involved.`,
+      snippet: match[0],
+      extractedCommand: match[0],
+      mitigation: sig.mitigation,
+    });
   }
 
   return findings;

@@ -2,6 +2,11 @@ import { useState, useMemo, useCallback } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n';
 import { analyzeInjection, neutralizeInjections } from '../core/injection';
+import {
+  buildDeterministicBriefing,
+  explainAttackVectorWithAI,
+  type AttackVectorBriefing,
+} from '../core/security/explainer';
 
 // Preset sample attacks for demonstration and auditing
 const SAMPLE_ATTACKS: { id: string; labelKey: string; generate: () => string }[] = [
@@ -51,6 +56,14 @@ const SAMPLE_ATTACKS: { id: string; labelKey: string; generate: () => string }[]
   },
 ];
 
+const SEVERITY_BADGE: Record<string, string> = {
+  CRITICAL: 'badge-danger',
+  HIGH: 'badge-danger',
+  MEDIUM: 'badge-warning',
+  LOW: 'badge-warning',
+  CLEAN: 'badge-success',
+};
+
 export default function InjectionPanel() {
   const {
     originalText,
@@ -64,10 +77,19 @@ export default function InjectionPanel() {
     appMode,
   } = useStore();
 
+  const applyTextMutation = useStore((s: any) => s.applyTextMutation);
+  const setAttackBriefing = useStore((s: any) => s.setAttackBriefing);
+  const storeBriefings = useStore((s: any) => s.attackBriefings);
+
   const t = useT();
   const [selectedSample, setSelectedSample] = useState('');
   const [activeViewMode, setActiveViewMode] = useState<'xray' | 'human'>('xray');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const [localBriefings, setLocalBriefings] = useState<Record<string, AttackVectorBriefing>>({});
+  const [aiLoading, setAiLoading] = useState<Record<string, boolean>>({});
+
+  const canRunAI = (llmConfig?.provider === 'local' || appMode === 'online');
 
   const handleInspect = useCallback(
     async (runSemantic = false) => {
@@ -76,27 +98,30 @@ export default function InjectionPanel() {
       try {
         const res = await analyzeInjection(originalText, {
           llmConfig,
-          runSemanticEval: runSemantic && appMode === 'online',
+          runSemanticEval: runSemantic && canRunAI,
         });
         setInjectionResult(res);
       } finally {
         setIsAnalyzingInjection(false);
       }
     },
-    [originalText, llmConfig, appMode, setInjectionResult, setIsAnalyzingInjection]
+    [originalText, llmConfig, canRunAI, setInjectionResult, setIsAnalyzingInjection]
   );
 
+  // BUG-04 FIX: Never call setOriginalText(res.revealedText) which wipes out results!
+  // Instead applyTextMutation and setCleanedText.
   const handleNeutralize = useCallback(
     (mode: 'strip' | 'reveal') => {
       if (!originalText) return;
       const res = neutralizeInjections(originalText, mode);
-      if (mode === 'strip') {
-        setCleanedText(res.cleanedText);
-      } else {
-        setOriginalText(res.revealedText);
+      const targetText = mode === 'reveal' ? res.revealedText : res.cleanedText;
+
+      if (typeof applyTextMutation === 'function') {
+        applyTextMutation(targetText, 'injection-neutralize', `Injection ${mode}`);
       }
+      setCleanedText(targetText);
     },
-    [originalText, setCleanedText, setOriginalText]
+    [originalText, setCleanedText, applyTextMutation]
   );
 
   const handleLoadSample = (sampleId: string) => {
@@ -113,6 +138,19 @@ export default function InjectionPanel() {
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
+
+  const handleExplainAI = useCallback(async (key: string, finding: any) => {
+    setAiLoading(prev => ({ ...prev, [key]: true }));
+    try {
+      const res = await explainAttackVectorWithAI(finding, 'injection', llmConfig, appMode === 'offline');
+      setLocalBriefings(prev => ({ ...prev, [key]: res }));
+      if (typeof setAttackBriefing === 'function') {
+        setAttackBriefing(key, res);
+      }
+    } finally {
+      setAiLoading(prev => ({ ...prev, [key]: false }));
+    }
+  }, [llmConfig, appMode, setAttackBriefing]);
 
   // Highlighting Model/X-Ray View
   const highlightedModelView = useMemo(() => {
@@ -175,18 +213,46 @@ export default function InjectionPanel() {
     return elements;
   }, [originalText]);
 
-  const severityBadgeClass = (severity: string) => {
-    switch (severity) {
-      case 'CRITICAL':
-      case 'HIGH':
-        return 'badge-danger';
-      case 'MEDIUM':
-      case 'LOW':
-        return 'badge-warning';
-      default:
-        return 'badge-success';
+  // Derive detected injection attack briefings
+  const detectedVectors = useMemo(() => {
+    if (!injectionResult) return [];
+    const vectors: { key: string; item: any; briefing: AttackVectorBriefing }[] = [];
+    const seen = new Set<string>();
+
+    for (const p of injectionResult.decodedPayloads) {
+      const key = `payload-${p.vector}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        vectors.push({
+          key,
+          item: p,
+          briefing: buildDeterministicBriefing(p, 'injection'),
+        });
+      }
     }
+
+    for (const f of injectionResult.findings) {
+      const key = `finding-${f.ruleId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        vectors.push({
+          key,
+          item: f,
+          briefing: buildDeterministicBriefing(f, 'injection'),
+        });
+      }
+    }
+
+    return vectors;
+  }, [injectionResult]);
+
+  const severityBadgeClass = (severity: string) => {
+    return SEVERITY_BADGE[severity] ?? 'badge-neutral';
   };
+
+  const hasTriggersToAudit =
+    injectionResult &&
+    (injectionResult.decodedPayloads.length > 0 || injectionResult.findings.length > 0);
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-surface dark:bg-surface-dark text-ink dark:text-ink-dark">
@@ -201,11 +267,11 @@ export default function InjectionPanel() {
             {isAnalyzingInjection ? t('inj.analyzing') : t('inj.analyze')}
           </button>
 
-          {appMode === 'online' && (
+          {canRunAI && (
             <button
               onClick={() => handleInspect(true)}
-              disabled={isAnalyzingInjection || !originalText.trim() || !injectionResult?.decodedPayloads.length}
-              title="Run deep semantic LLM audit on decoded hidden payloads"
+              disabled={isAnalyzingInjection || !originalText.trim() || !hasTriggersToAudit}
+              title="Run deep semantic LLM audit on detected prompt injection vectors"
               className="btn-ghost"
             >
               {t('inj.semanticEval')}
@@ -311,6 +377,79 @@ export default function InjectionPanel() {
                 </div>
               </div>
             </div>
+
+            {/* Structured Attack Vector & Risk Briefings */}
+            {detectedVectors.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-danger dark:text-red-400">
+                  <span>🛡</span>
+                  <span>Attack Vector & Risk Briefing</span>
+                </div>
+                <div className="space-y-2.5">
+                  {detectedVectors.map(({ key, item, briefing: defaultBriefing }) => {
+                    const briefing = localBriefings[key] ?? storeBriefings?.[key] ?? defaultBriefing;
+                    const isLoading = aiLoading[key] ?? false;
+
+                    return (
+                      <div
+                        key={key}
+                        className="p-3.5 rounded-lg border border-danger/30 bg-panel dark:bg-panel-dark space-y-2.5 shadow-sm"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span className={`badge ${SEVERITY_BADGE[briefing.severity] ?? 'badge-neutral'} font-mono text-[9px]`}>
+                              {briefing.severity} ({briefing.riskScore}/100)
+                            </span>
+                            <span className="text-xs font-bold text-ink dark:text-ink-dark">
+                              {briefing.vectorName}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="badge-neutral font-mono text-[9px]">
+                              {briefing.source === 'on-device-ai' || briefing.source === 'local-llm' || briefing.source === 'cloud-llm'
+                                ? '✦ AI-Assisted'
+                                : 'Deterministic'}
+                            </span>
+                            <button
+                              onClick={() => handleExplainAI(key, item)}
+                              disabled={!canRunAI || isLoading}
+                              title={canRunAI ? 'Generate AI-powered forensic briefing' : 'Requires Online Mode or On-Device model'}
+                              className="px-2 py-0.5 rounded text-[10px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors disabled:opacity-40"
+                            >
+                              {isLoading ? 'Analyzing...' : '✦ Explain with AI'}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-1">
+                          <div className="p-2 rounded bg-surface/70 dark:bg-surface-dark/70 border border-border/50 dark:border-border-dark/50">
+                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">How It Works:</span>
+                            <p className="text-ink-muted dark:text-ink-dark-muted leading-relaxed">{briefing.mechanism}</p>
+                          </div>
+                          <div className="p-2 rounded bg-surface/70 dark:bg-surface-dark/70 border border-border/50 dark:border-border-dark/50">
+                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">What It Does:</span>
+                            <p className="text-ink-muted dark:text-ink-dark-muted leading-relaxed">{briefing.whatItDoes}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                          <span className="font-semibold text-ink dark:text-ink-dark">Targets:</span>
+                          {briefing.targets.map(tg => (
+                            <span key={tg} className="badge-neutral text-[9px]">{tg}</span>
+                          ))}
+                        </div>
+
+                        <div className="text-[11px] bg-danger/5 dark:bg-danger/10 border border-danger/15 rounded p-2 text-ink-muted dark:text-ink-dark-muted">
+                          <span className="font-semibold text-danger dark:text-red-400">Mitigation: </span>
+                          {briefing.mitigation}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Semantic LLM Audit Callout (if available) */}
             {injectionResult.semanticEvaluation && (

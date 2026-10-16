@@ -24,6 +24,8 @@ export default function WatermarkPanel() {
     setPollutionResult, setPoisonResult,
   } = useStore();
 
+  const applyTextMutation = useStore((s: any) => s.applyTextMutation);
+
   const t = useT();
   const [intensity, setIntensity] = useState<'light' | 'moderate' | 'heavy'>('moderate');
   const [strategies, setStrategies] = useState({
@@ -67,8 +69,13 @@ export default function WatermarkPanel() {
 
     const result = neutralize(text, { strategies: enabledStrategies, intensity });
     setNeutralizationResult(result);
-    setCleanedText(result.neutralized);
-  }, [text, strategies, intensity, setNeutralizationResult, setCleanedText]);
+    const target = result.neutralized;
+
+    if (typeof applyTextMutation === 'function') {
+      applyTextMutation(target, 'watermark-neutralize', 'Neutralize Watermark');
+    }
+    setCleanedText(target);
+  }, [text, strategies, intensity, setNeutralizationResult, setCleanedText, applyTextMutation]);
 
   // v2: window-aware targeted neutralization (exact marginal Δz ranking)
   const handleWindowAware = useCallback(() => {
@@ -84,10 +91,16 @@ export default function WatermarkPanel() {
       1.5,
       Math.max(10, Math.floor(text.length / 40)),
     );
-    setCleanedText(res.text);
+    const target = res.text;
+
+    if (typeof applyTextMutation === 'function') {
+      applyTextMutation(target, 'watermark-neutralize', 'Neutralize Watermark (Window-Aware)');
+    }
+    setCleanedText(target);
+
     setNeutralizationResult({
       original: text,
-      neutralized: res.text,
+      neutralized: target,
       suggestions: [],
       appliedCount: res.applied,
       beforeZScore: res.beforeZ,
@@ -95,7 +108,7 @@ export default function WatermarkPanel() {
       iterationCount: 1,
       durationMs: 0,
     });
-  }, [text, setCleanedText, setNeutralizationResult]);
+  }, [text, setCleanedText, setNeutralizationResult, applyTextMutation]);
 
   // v2: token-boundary poisoning
   const handlePoison = useCallback((mode: 'word-joiner' | 'nfd' | 'aggressive') => {
@@ -149,55 +162,44 @@ export default function WatermarkPanel() {
       return;
     }
 
-    // Offline: deterministic local pipelines.
-    if (rewriteMode === 'neutralize') {
-      handleNeutralize();
-      setRewriteResult(null);
-      return;
-    }
-    const result = rewriteMode === 'humanize'
-      ? humanize(text, intensity)
-      : deparaphrase(text, intensity);
-    setRewriteResult(result);
+    // Offline mode: deterministic rule-based rewrites
+    const result = rewriteMode === 'humanize' ? humanize(text) : deparaphrase(text);
     setCleanedText(result.rewritten);
-  }, [text, appMode, rewriteMode, intensity, llmConfig, handleNeutralize, setCleanedText, setRewriteResult, setIsLLMProcessing]);
+    setRewriteResult({ ...result, engine: 'local' });
+  }, [text, appMode, llmConfig, rewriteMode, setIsLLMProcessing, setCleanedText, setRewriteResult]);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border dark:border-border-dark flex-wrap">
+    <div className="flex flex-col h-full overflow-hidden bg-surface dark:bg-surface-dark text-ink dark:text-ink-dark">
+      {/* Top Toolbar */}
+      <div className="panel-bar">
         <button onClick={handleDetect} disabled={!text || isDetectingWatermark}
-          className="px-3 py-1.5 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover disabled:opacity-40 transition-colors">
-          {t('wm.detect')}
+          className="btn-primary">
+          {isDetectingWatermark ? t('wm.detecting') : t('wm.detect')}
         </button>
         <button onClick={handleSweep} disabled={!text || isDetectingWatermark}
-          className="px-3 py-1.5 bg-panel dark:bg-panel-dark text-sm rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 transition-colors">
+          className="btn-ghost" title="Sweep 216 key/window/gamma combinations to detect watermarks when the exact key is unknown">
           {t('wm.sweep')}
         </button>
-        <div className="h-4 w-px bg-border dark:bg-border-dark mx-1" />
         <button onClick={handleNeutralize} disabled={!text}
-          className="px-3 py-1.5 bg-warning/20 text-warning text-sm rounded-lg hover:bg-warning/30 disabled:opacity-40 transition-colors">
+          className="btn-warn" title="Neutralize watermark tokens">
           {t('wm.neutralize')}
         </button>
-        <button onClick={handleWindowAware} disabled={!text} title="Sweep first, then surgically kill the strongest watermark config with exact Δz-ranked edits"
-          className="px-3 py-1.5 bg-warning/20 text-warning text-sm rounded-lg hover:bg-warning/30 disabled:opacity-40 transition-colors">
-          v2 Kill
+        <button onClick={handleWindowAware} disabled={!text}
+          className="btn-ghost" title="Window-aware watermark killer (Δz targeted suppression)">
+          Δz Killer
         </button>
 
         <div className="h-4 w-px bg-border dark:bg-border-dark mx-1" />
-        <button onClick={() => handlePoison('nfd')} disabled={!text} title="Inject NFD combining marks — visually invisible, shifts every downstream token boundary"
-          className="px-3 py-1.5 bg-danger/10 text-danger text-sm rounded-lg hover:bg-danger/20 disabled:opacity-40 transition-colors">
-          Poison·NFD
-        </button>
-        <button onClick={() => handlePoison('word-joiner')} disabled={!text} title="Inject zero-width joiners inside words"
-          className="px-3 py-1.5 bg-danger/10 text-danger text-sm rounded-lg hover:bg-danger/20 disabled:opacity-40 transition-colors">
-          Poison·ZW
+        <button onClick={() => handlePoison('word-joiner')} disabled={!text} title="Word-joiner token boundary poisoning"
+          className="btn-ghost">
+          Poison
         </button>
         <button onClick={handleDepoison} disabled={!text} title="Strip poisoning artifacts (inverse)"
           className="px-2 py-1.5 text-xs bg-panel dark:bg-panel-dark rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40">
           ↺
         </button>
         <button onClick={handlePollute} disabled={!text} title="Forge 2 alternative watermarks so sweeps report conflicting evidence"
-          className="px-3 py-1.5 bg-danger/20 text-danger text-sm font-semibold rounded-lg hover:bg-danger/30 disabled:opacity-40 transition-colors">
+          className="btn-ghost text-danger">
           Pollute
         </button>
 
@@ -209,96 +211,113 @@ export default function WatermarkPanel() {
           <option value="neutralize">Neutralize</option>
         </select>
         <button onClick={handleRewrite} disabled={!text || isLLMProcessing}
-          className="px-3 py-1.5 bg-success/20 text-success text-sm rounded-lg hover:bg-success/30 disabled:opacity-40 transition-colors">
+          className="btn-ghost text-success">
           {isLLMProcessing ? t('wm.rewriting') : t('wm.rewrite')}
         </button>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-panel dark:bg-panel-dark text-gray-400" title="Offline uses deterministic local transforms; Online uses your configured LLM.">
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-panel dark:bg-panel-dark text-ink-muted dark:text-ink-dark-muted ml-auto" title="Offline uses deterministic local transforms; Online uses your configured LLM.">
           {t('wm.engine')}: {engineLabel}
         </span>
       </div>
 
-      <div className="px-3 py-2 border-b border-border dark:border-border-dark flex items-center gap-3 text-xs flex-wrap">
-        <span className="text-gray-400">{t('wm.intensity')}</span>
+      {/* Strategies and Intensity */}
+      <div className="px-4 py-2 border-b border-border dark:border-border-dark flex items-center gap-3 text-xs flex-wrap bg-panel/40 dark:bg-panel-dark/40">
+        <span className="text-ink-muted dark:text-ink-dark-muted">{t('wm.intensity')}</span>
         {(['light', 'moderate', 'heavy'] as const).map(i => (
           <button key={i} onClick={() => setIntensity(i)}
-            className={`px-2 py-0.5 rounded ${intensity === i ? 'bg-accent text-white' : 'bg-panel dark:bg-panel-dark'}`}>
+            className={`px-2 py-0.5 rounded transition-colors ${intensity === i ? 'bg-accent text-white font-semibold' : 'btn-ghost'}`}>
             {t(`common.${i}`)}
           </button>
         ))}
         <div className="h-3 w-px bg-border dark:bg-border-dark mx-1" />
-        <span className="text-gray-400" title="Strategies apply to the statistical Neutralize path.">{t('wm.strategies')}</span>
+        <span className="text-ink-muted dark:text-ink-dark-muted" title="Strategies apply to the statistical Neutralize path.">{t('wm.strategies')}</span>
         {(Object.entries(strategies) as Array<[string, boolean]>).map(([key, val]) => (
           <label key={key} className="flex items-center gap-1 cursor-pointer">
             <input type="checkbox" checked={val}
               onChange={() => setStrategies(s => ({ ...s, [key]: !val }))}
-              className="w-3 h-3" />
-            <span>{key}</span>
+              className="w-3.5 h-3.5 accent-accent" />
+            <span className="text-[11px]">{key}</span>
           </label>
         ))}
       </div>
 
       {/* On-device model progress (first run downloads the model) */}
       {localProgress && (
-        <div className="px-3 py-2 border-b border-border dark:border-border-dark">
+        <div className="px-4 py-2 border-b border-border dark:border-border-dark bg-panel dark:bg-panel-dark">
           <div className="flex items-center justify-between text-[11px] text-ink-muted dark:text-ink-dark-muted mb-1">
             <span>{localProgress.message}</span>
             {localProgress.status === 'downloading' && <span>{localProgress.percent}%</span>}
           </div>
-          <div className="w-full h-1 bg-panel dark:bg-panel-dark rounded-full overflow-hidden border border-border dark:border-border-dark">
+          <div className="w-full h-1 bg-surface dark:bg-surface-dark rounded-full overflow-hidden border border-border dark:border-border-dark">
             <div className="h-full bg-accent rounded-full transition-all duration-300"
               style={{ width: `${localProgress.status === 'downloading' ? localProgress.percent : 100}%` }} />
           </div>
-          <p className="mt-1 text-[10px] text-ink-faint dark:text-ink-dark-faint">
-            The model downloads once, then runs on your device — no key, fully private.
-          </p>
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-3 text-sm">
+      {/* Results */}
+      <div className="flex-1 overflow-auto p-4 space-y-4">
         {watermarkResult && (
           <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              <Stat label={t('wm.zscore')} value={watermarkResult.zScore.toFixed(3)}
-                color={watermarkResult.isSignificant ? 'text-danger' : 'text-success'} />
-              <Stat label={t('wm.pvalue')} value={watermarkResult.pValue.toFixed(5)} />
-              <Stat label={t('wm.greenratio')} value={`${(watermarkResult.greenListRatio * 100).toFixed(1)}%`} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <Stat label={t('wm.tokens')} value={String(watermarkResult.totalTokens)} />
-              <Stat label={t('wm.greenhits')} value={String(watermarkResult.greenListHits)} />
-              <Stat label={t('wm.duration')} value={`${watermarkResult.durationMs.toFixed(1)}ms`} />
-            </div>
-
-            <div className={`px-3 py-2 rounded-lg text-sm ${
+            {/* Plain-English Verdict Banner */}
+            <div className={`p-4 rounded-xl border-2 flex items-start gap-3 shadow-sm ${
               watermarkResult.isSignificant
-                ? 'bg-red-50 dark:bg-red-900/20 text-danger'
-                : 'bg-green-50 dark:bg-green-900/20 text-success'
+                ? 'border-danger bg-danger/10 dark:bg-danger/20 text-danger dark:text-red-300'
+                : 'border-success bg-success/10 dark:bg-success/20 text-success dark:text-emerald-300'
             }`}>
-              {watermarkResult.isSignificant
-                ? `${t('wm.detected')} (z=${watermarkResult.zScore.toFixed(2)}, gamma=${watermarkResult.gamma})`
-                : `${t('wm.nosignal')} (z=${watermarkResult.zScore.toFixed(2)})`
-              }
+              <span className="text-2xl shrink-0 mt-0.5">
+                {watermarkResult.isSignificant ? '⚠' : '✓'}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold">
+                  {watermarkResult.isSignificant
+                    ? 'Statistical Token Watermark Detected'
+                    : 'No Hidden Watermark Detected'}
+                </div>
+                <p className="text-xs text-ink-muted dark:text-ink-dark-muted mt-0.5 leading-relaxed">
+                  {watermarkResult.isSignificant
+                    ? `The text exhibits a statistically improbable token green-list concentration (z = ${watermarkResult.zScore.toFixed(2)}, γ = ${watermarkResult.gamma}), indicating synthetic LLM watermarking.`
+                    : `Token distributions match natural human writing variation (z = ${watermarkResult.zScore.toFixed(2)}), with no statistically significant watermark pattern.`}
+                </p>
+              </div>
             </div>
 
-            <div className="mt-3">
-              <h4 className="text-xs font-semibold mb-2">{t('wm.tokenDist')}</h4>
-              <div className="flex flex-wrap gap-0.5">
-                {watermarkResult.tokens.slice(0, 200).map((t, i) => (
-                  <span key={i}
-                    className={`inline-block px-1 py-0.5 text-xs rounded ${
-                      t.isGreenList
-                        ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
-                        : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+            {/* Progressive Disclosure: Technical Statistical Details */}
+            <details className="rounded-xl border border-border dark:border-border-dark bg-panel/50 dark:bg-panel-dark/50 p-3 space-y-3">
+              <summary className="text-[11px] font-bold uppercase tracking-wider text-ink-muted dark:text-ink-dark-muted cursor-pointer hover:text-ink transition-colors">
+                Show Technical Statistical Details (γ, z-score, p-value)
+              </summary>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2">
+                <Stat label="Statistical z-Score" value={watermarkResult.zScore.toFixed(3)}
+                  color={watermarkResult.isSignificant ? 'text-danger' : 'text-success'} />
+                <Stat label="p-Value" value={watermarkResult.pValue < 0.00001 ? '< 0.00001' : watermarkResult.pValue.toFixed(5)} />
+                <Stat label="Green-List Ratio" value={`${(watermarkResult.greenListRatio * 100).toFixed(1)}%`} />
+                <Stat label="Tokens Evaluated" value={String(watermarkResult.totalTokens)} />
+                <Stat label="Green-List Hits" value={String(watermarkResult.greenListHits)} />
+                <Stat label="Detection Duration" value={`${watermarkResult.durationMs.toFixed(1)}ms`} />
+              </div>
+            </details>
+
+            {/* Token Distribution Visualizer */}
+            <div className="p-3.5 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark">
+              <h4 className="text-xs font-semibold mb-2 text-ink dark:text-ink-dark">{t('wm.tokenDist')}</h4>
+              <div className="flex flex-wrap gap-1 max-h-48 overflow-y-auto">
+                {watermarkResult.tokens.slice(0, 200).map((tok, i) => (
+                  <span
+                    key={i}
+                    className={`inline-block px-1.5 py-0.5 text-[11px] font-mono rounded ${
+                      tok.isGreenList
+                        ? 'bg-green-100 dark:bg-green-950/50 text-green-700 dark:text-green-300 border border-green-300/40'
+                        : 'bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-300/40'
                     }`}
-                    title={`${t.token} (score: ${t.score.toFixed(3)}, ${t.isGreenList ? 'green' : 'red'})`}
+                    title={`${tok.token} (score: ${tok.score.toFixed(3)}, ${tok.isGreenList ? 'green' : 'red'})`}
                   >
-                    {t.token}
+                    {tok.token}
                   </span>
                 ))}
                 {watermarkResult.tokens.length > 200 && (
-                  <span className="text-xs text-gray-400 self-center ml-1">
-                    ...{watermarkResult.tokens.length - 200} more
+                  <span className="text-xs text-ink-muted dark:text-ink-dark-muted self-center ml-1">
+                    +{watermarkResult.tokens.length - 200} more
                   </span>
                 )}
               </div>
@@ -307,20 +326,25 @@ export default function WatermarkPanel() {
         )}
 
         {watermarkSweep && !watermarkResult && (
-          <div className="text-sm text-gray-400">{watermarkSweep.summary}</div>
+          <div className="text-sm text-ink-muted dark:text-ink-dark-muted p-4 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark">
+            {watermarkSweep.summary}
+          </div>
         )}
 
         {rewriteResult && (
-          <div className="mt-4 pt-4 border-t border-border dark:border-border-dark">
-            <h3 className="text-xs font-semibold mb-2">
-              {t('wm.rewriteResults')} <span className="text-gray-400 font-normal">({rewriteResult.mode} · {
-                rewriteResult.engine === 'local' ? 'local rules'
-                  : rewriteResult.engine === 'device' ? 'on-device AI'
-                  : 'LLM'
-              })</span>
+          <div className="p-4 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-3">
+            <h3 className="text-xs font-semibold text-ink dark:text-ink-dark">
+              {t('wm.rewriteResults')}{' '}
+              <span className="text-ink-muted dark:text-ink-dark-muted font-normal">
+                ({rewriteResult.mode} · {
+                  rewriteResult.engine === 'local' ? 'local rules'
+                    : rewriteResult.engine === 'device' ? 'on-device AI'
+                    : 'LLM'
+                })
+              </span>
             </h3>
             {rewriteResult.engine === 'local' && (
-              <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="grid grid-cols-3 gap-2.5 mb-2">
                 <Stat label="Footprint Before" value={`${(rewriteResult.beforeScore * 100).toFixed(0)}%`} />
                 <Stat label="Footprint After" value={`${(rewriteResult.afterScore * 100).toFixed(0)}%`}
                   color={rewriteResult.afterScore < rewriteResult.beforeScore ? 'text-success' : 'text-danger'} />
@@ -329,25 +353,20 @@ export default function WatermarkPanel() {
             )}
             <div className="space-y-1">
               {rewriteResult.edits.slice(0, 30).map((e, i) => (
-                <div key={i} className="text-xs px-2 py-1 rounded bg-panel dark:bg-panel-dark flex gap-2">
-                  <span className="text-gray-400 shrink-0">{e.type}</span>
+                <div key={i} className="text-xs px-2.5 py-1 rounded bg-surface dark:bg-surface-dark flex gap-2">
+                  <span className="text-ink-muted shrink-0">{e.type}</span>
                   {e.original && <span className="font-mono line-through text-red-400 truncate">{e.original.slice(0, 40)}</span>}
                   {e.replacement && <span className="text-success font-mono truncate">{e.replacement.slice(0, 40)}</span>}
                 </div>
               ))}
-              {rewriteResult.engine !== 'local' && rewriteResult.edits.length === 0 && (
-                <p className="text-xs text-gray-400">
-                  {rewriteResult.engine === 'device' ? 'On-device rewrite applied' : 'LLM rewrite applied'} ({rewriteResult.durationMs.toFixed(0)}ms). See the diff view for changes.
-                </p>
-              )}
             </div>
           </div>
         )}
 
         {neutralizationResult && (
-          <div className="mt-4 pt-4 border-t border-border dark:border-border-dark">
-            <h3 className="text-xs font-semibold mb-2">{t('wm.neutralizeResults')}</h3>
-            <div className="grid grid-cols-3 gap-3 mb-3">
+          <div className="p-4 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-3">
+            <h3 className="text-xs font-semibold text-ink dark:text-ink-dark">{t('wm.neutralizeResults')}</h3>
+            <div className="grid grid-cols-3 gap-2.5 mb-2">
               <Stat label={t('wm.beforeZ')} value={neutralizationResult.beforeZScore.toFixed(3)} />
               <Stat label={t('wm.afterZ')} value={neutralizationResult.afterZScore.toFixed(3)}
                 color={neutralizationResult.afterZScore < neutralizationResult.beforeZScore ? 'text-success' : 'text-danger'} />
@@ -355,8 +374,8 @@ export default function WatermarkPanel() {
             </div>
             <div className="space-y-1">
               {neutralizationResult.suggestions.slice(0, 20).map((s, i) => (
-                <div key={i} className="text-xs px-2 py-1 rounded bg-panel dark:bg-panel-dark flex gap-2">
-                  <span className="text-gray-400">{s.strategy}</span>
+                <div key={i} className="text-xs px-2.5 py-1 rounded bg-surface dark:bg-surface-dark flex gap-2">
+                  <span className="text-ink-muted">{s.strategy}</span>
                   <span className="font-mono line-through text-red-400">{s.originalToken}</span>
                   <span className="text-success font-mono">{s.alternatives[0]?.text}</span>
                 </div>
@@ -364,35 +383,35 @@ export default function WatermarkPanel() {
             </div>
           </div>
         )}
+
         {pollutionResult && (
-          <div className="mt-4 pt-4 border-t border-border dark:border-border-dark">
-            <h3 className="text-xs font-semibold mb-2">Watermark Pollution</h3>
-            <div className="grid grid-cols-3 gap-3 mb-3">
+          <div className="p-4 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-3">
+            <h3 className="text-xs font-semibold text-ink dark:text-ink-dark">Watermark Pollution</h3>
+            <div className="grid grid-cols-3 gap-2.5 mb-2">
               <Stat label="Configs forged" value={String(pollutionResult.forgedConfigs.length)} />
               <Stat label="Substitutions" value={String(pollutionResult.substitutions)} />
-              <Stat label="Sweep significant hits" value={String(pollutionResult.significantHitsAfter)}
+              <Stat label="Significant hits after" value={String(pollutionResult.significantHitsAfter)}
                 color={pollutionResult.significantHitsAfter > 1 ? 'text-success' : ''} />
             </div>
-            <div className="space-y-1">
-              {pollutionResult.forgedConfigs.map((f, i) => (
-                <div key={i} className="text-xs px-2 py-1 rounded bg-panel dark:bg-panel-dark flex gap-2 font-mono">
-                  <span className="text-gray-400">key={f.config.hashKey}</span>
-                  <span>z: {f.beforeZ.toFixed(2)} → <span className="text-success">{f.afterZ.toFixed(2)}</span></span>
-                </div>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-gray-400">{pollutionResult.summary}</p>
+            <p className="text-xs text-ink-muted dark:text-ink-dark-muted">{pollutionResult.summary}</p>
           </div>
         )}
 
         {poisonResult && (
-          <div className="mt-4 pt-4 border-t border-border dark:border-border-dark">
-            <h3 className="text-xs font-semibold mb-2">Token-Boundary Poisoning</h3>
-            <div className="grid grid-cols-3 gap-3">
+          <div className="p-4 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-3">
+            <h3 className="text-xs font-semibold text-ink dark:text-ink-dark">Token-Boundary Poisoning</h3>
+            <div className="grid grid-cols-3 gap-2.5">
               <Stat label="Injections" value={String(poisonResult.injections)} />
               <Stat label="Mode" value={poisonResult.mode} />
               <Stat label="Coverage" value={`${poisonResult.wordsCovered}/${poisonResult.totalWords}`} />
             </div>
+          </div>
+        )}
+
+        {!watermarkResult && !watermarkSweep && !neutralizationResult && !pollutionResult && !poisonResult && (
+          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-ink-muted dark:text-ink-dark-muted space-y-2">
+            <span className="text-3xl opacity-40 font-mono">⊕</span>
+            <p className="text-xs">Run Detect or Sweep to test for statistical token watermarks.</p>
           </div>
         )}
       </div>
@@ -402,9 +421,9 @@ export default function WatermarkPanel() {
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="bg-panel dark:bg-panel-dark rounded-lg px-3 py-2">
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className={`text-lg font-mono font-semibold ${color ?? ''}`}>{value}</div>
+    <div className="bg-surface dark:bg-surface-dark border border-border/60 dark:border-border-dark/60 rounded-lg px-3 py-2">
+      <div className="text-[10px] text-ink-muted dark:text-ink-dark-muted uppercase font-semibold">{label}</div>
+      <div className={`text-base font-mono font-bold ${color ?? 'text-ink dark:text-ink-dark'}`}>{value}</div>
     </div>
   );
 }

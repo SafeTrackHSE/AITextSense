@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+// (exportHtml sanitizes via DOMPurify, which requires a DOM)
+import { describe, it, expect, beforeAll } from 'vitest';
 import { toPlainText, exportDocx, exportHtml, exportMarkdown, exportPlainText } from '../src/core/export/document';
+
+// jsdom doesn't implement the blob-download plumbing file-saver relies on; stub it
+// so the export functions can run to completion (we're testing content, not the save).
+beforeAll(() => {
+  const u = URL as unknown as { createObjectURL: (b: unknown) => string; revokeObjectURL: (s: string) => void };
+  u.createObjectURL = () => 'blob:mock';
+  u.revokeObjectURL = () => {};
+});
 
 const MD = `# Title
 

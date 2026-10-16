@@ -1,7 +1,7 @@
 {
   "name": "aitextsense",
   "private": true,
-  "version": "2.1.0",
+  "version": "3.0.0",
   "author": "Wilson Volpe",
   "license": "UNLICENSED",
   "description": "AI TextSense v2.1 — Forensic Text & Prompt Injection Inspector. (c) 2026 Wilson Volpe. All rights reserved.",

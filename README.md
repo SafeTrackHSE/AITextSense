@@ -1,4 +1,4 @@
-# AI TextSense (v2.1.0)
+# AI TextSense (v2.2.0)
 
 **Forensic analysis and sanitization of AI-generated text — prompt injections, statistical watermarks, LLM stylometric fingerprints, Unicode steganography.**
 
@@ -19,6 +19,7 @@ AI TextSense is a dual-domain forensic workstation organized into two core disci
 | **Invisible Unicode & Steganography** | Zero-width spaces (`U+200B`, `U+200C`, `U+200D`, `U+FEFF`, `U+2060`), variation selectors, and hidden metadata payloads. |
 | **Homoglyph & Mixed-Script Attacks** | Cyrillic and Greek lookalikes substituting Latin characters with automated normalization. |
 | **One-Click Neutralization & Unmasker** | Reversibly strip covert payload tokens or reveal hidden instructions as visible bracketed text. |
+| **Payload & Threat Analysis** | Unconditional scan for dangerous code/commands — recursive Base64/hex/ROT13/percent decoding, categorized static rule library (destructive filesystem, C2/reverse-shell, credential harvesting, persistence, obfuscation), and an optional AI capability-review pass for novel payloads. Every finding carries a full forensic explanation (mechanism, targets, consequence, mitigation), independent of any jailbreak-intent judgment. |
 
 ### 2. AI Artifacts & Forensics (Detect & Neutralize)
 | Signal | Forensic Method & Capabilities |

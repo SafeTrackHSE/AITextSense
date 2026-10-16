@@ -40,6 +40,34 @@ export interface InjectionReportSection {
   topFindings: string[];
 }
 
+/**
+ * Unlike InjectionReportSection.topFindings (titles only), this carries the
+ * full explanation per finding — a PDF handed to a stakeholder needs to stand
+ * on its own without the app open next to it. See plan §6.
+ */
+export interface ThreatReportSection {
+  riskScore: number;
+  severity: string;
+  findingsCount: number;
+  spansExtracted: number;
+  decodedSpanCount: number;
+  capabilityReviewed: boolean;
+  findings: Array<{
+    ruleId: string;
+    severity: string;
+    category: string;
+    mechanism: string;
+    targets: string[];
+    consequence: string;
+    context?: string;
+    mitigation: string;
+    source: string;
+    confidence: string;
+    /** Detailed AI deep-dive explanation of this specific payload, when the online capability-review pass ran. */
+    aiDeepDive?: { mechanism: string; consequence: string; mitigation: string; confidence: string };
+  }>;
+}
+
 export interface IntegrityReport {
   version: string;
   application: string;
@@ -76,6 +104,7 @@ export interface IntegrityReport {
     hedgingPhraseCount: number;
   } | null;
   injectionResult: InjectionReportSection | null;
+  threatResult: ThreatReportSection | null;
   optimizerResult: OptimizerReportSection | null;
   pollutionResult: PollutionReportSection | null;
   poisonResult: PoisonReportSection | null;

@@ -5,13 +5,17 @@ import { useStore } from '../store';
 import { organizeStructure } from '../core/rewrite/organize';
 import { rewriteWithLLM, ORGANIZE_PROMPT } from '../core/llm/client';
 import { exportAs, type ExportFormat } from '../core/export/document';
+import { renderMarkdownSafe } from '../lib/sanitizeHtml';
 import { useT } from '../i18n';
 
 type EditorMode = 'markdown' | 'rich';
 
 marked.setOptions({ breaks: true });
+// SECURITY: never render user-supplied Markdown to the DOM unsanitized — this
+// app ingests adversarial text by design. All render paths go through the
+// DOMPurify-backed renderMarkdownSafe (see src/lib/sanitizeHtml.ts).
 function mdToHtml(md: string): string {
-  return marked.parse(md) as string;
+  return renderMarkdownSafe(md);
 }
 
 export default function CleanedEditor() {

@@ -4,6 +4,9 @@
  */
 import { marked, type Tokens } from 'marked';
 import { saveAs } from 'file-saver';
+import { sanitizeHtmlFragment } from '../../lib/sanitizeHtml';
+import type { AnalysisReport } from '../report/schema';
+import { exportReportDOCX } from '../report/export';
 
 marked.setOptions({ breaks: true });
 
@@ -49,7 +52,9 @@ export function exportPlainText(md: string, filename = 'cleaned.txt'): void {
 }
 
 export function exportHtml(md: string, filename = 'cleaned.html'): void {
-  const body = marked.parse(md) as string;
+  // Sanitize before writing to disk — the exported file may be opened in a
+  // browser elsewhere, so it must not carry an XSS/beacon payload from the input.
+  const body = sanitizeHtmlFragment(marked.parse(md) as string);
   saveAs(new Blob([htmlDoc(body)], { type: 'text/html;charset=utf-8' }), filename);
 }
 
@@ -158,3 +163,20 @@ export async function exportAs(format: ExportFormat, md: string): Promise<void> 
     case 'docx': return exportDocx(md);
   }
 }
+
+/**
+ * Export full executive forensic report as a Word (.docx) document
+ */
+export async function exportReportAsDocx(
+  report: AnalysisReport,
+  filename = 'forensic-report.docx'
+): Promise<Blob> {
+  const blob = await exportReportDOCX(report);
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    saveAs(blob, filename);
+  }
+  return blob;
+}
+
+export { exportReportDOCX };
+

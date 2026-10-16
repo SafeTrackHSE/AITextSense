@@ -1,11 +1,18 @@
+import type { RiskSeverity } from '../shared/severity';
+import type { SemanticEvaluationResult } from './evaluator';
+
 export type InjectionVector =
   | 'ascii-smuggling-tags'
   | 'zero-width-stego'
+  | 'variation-selector-stego'
   | 'bidi-override'
   | 'soft-hyphen-evasion'
-  | 'invisible-markdown-exfil';
+  | 'invisible-markdown-exfil'
+  /** No covert channel involved — an injection trigger phrase found directly in visible text. Added when the visible-text scan (§5.1) stopped being gated on an invisible payload existing first. */
+  | 'plain-text-trigger';
 
-export type InjectionRiskSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'CLEAN';
+/** Re-exported from the shared severity scale (`core/shared/severity.ts`) so existing imports keep working. */
+export type InjectionRiskSeverity = RiskSeverity;
 
 export interface DecodedPayload {
   id: string;
@@ -16,6 +23,8 @@ export interface DecodedPayload {
   binaryRepresentation?: string;
   startIndex: number;
   endIndex: number;
+  utf16Start?: number;
+  utf16End?: number;
   byteOffset: number;
   severity: InjectionRiskSeverity;
   description: string;
@@ -48,12 +57,7 @@ export interface InjectionAnalysisResult {
   findings: InjectionFinding[];
   decodedPayloads: DecodedPayload[];
   tokenizerImpact: TokenizerImpact;
-  semanticEvaluation?: {
-    isIntentMalicious: boolean;
-    confidence: number;
-    explanation: string;
-    targetRole?: string;
-  };
+  semanticEvaluation?: SemanticEvaluationResult;
   durationMs: number;
 }
 
