@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aitextsense"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "serde",
  "serde_json",
