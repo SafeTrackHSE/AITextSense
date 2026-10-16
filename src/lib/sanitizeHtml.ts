@@ -25,7 +25,7 @@ import { marked } from 'marked';
 let hookInstalled = false;
 function installHook(): void {
   if (hookInstalled) return;
-  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  DOMPurify.addHook('afterSanitizeAttributes', (node: Node) => {
     const el = node as Element;
     // Kill auto-loading remote resources (the markdown-image exfil beacon).
     for (const attr of ['src', 'srcset', 'background', 'poster']) {
