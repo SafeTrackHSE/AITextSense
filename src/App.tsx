@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, Component, type ReactNode, type ErrorInfo } from 'react';
 import { useStore, type ActivePanel } from './store';
 import Header from './components/Header';
 import SplashScreen from './components/SplashScreen';
@@ -16,6 +16,69 @@ import OutputPanel from './components/OutputPanel';
 import LLMConfigPanel from './components/LLMConfig';
 import Splitter from './components/Splitter';
 import { useT } from './i18n';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallbackTitle?: string;
+  fallbackDesc?: string;
+  onReset?: () => void;
+  resetLabel?: string;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class PanelErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('PanelErrorBoundary caught an error:', error, errorInfo);
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-6 text-center select-text">
+          <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center text-xl mb-3">
+            ⚠
+          </div>
+          <h3 className="text-sm font-semibold text-ink dark:text-ink-dark mb-1">
+            {this.props.fallbackTitle ?? 'Panel Encountered an Error'}
+          </h3>
+          <p className="text-xs text-ink-muted dark:text-ink-dark-muted max-w-md mb-4 leading-relaxed">
+            {this.props.fallbackDesc ?? 'An unexpected render error occurred in this panel. Your text and workspace are safe.'}
+          </p>
+          {this.state.error?.message && (
+            <pre className="text-[10px] font-mono text-red-600 dark:text-red-400 bg-panel dark:bg-panel-dark border border-border dark:border-border-dark p-2 rounded max-w-lg overflow-x-auto mb-4">
+              {this.state.error.message}
+            </pre>
+          )}
+          <button
+            onClick={this.handleReset}
+            className="btn-primary py-1 px-3 text-xs"
+          >
+            {this.props.resetLabel ?? 'Reload Panel'}
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface TabSection {
   id: string;
@@ -213,7 +276,7 @@ export default function App() {
             </div>
           )}
           {!topCollapsed && (
-            <Splitter orientation="horizontal" onResize={resizeLeft} title="Drag to resize the output panel" />
+            <Splitter orientation="horizontal" onResize={resizeLeft} title={t('app.resizeOutput')} />
           )}
           <div
             className="overflow-hidden min-h-0"
@@ -225,15 +288,15 @@ export default function App() {
 
         {/* Vertical splitter */}
         {!rightCollapsed && (
-          <Splitter orientation="vertical" onResize={resizeMain} title="Drag to resize the analysis panel" />
+          <Splitter orientation="vertical" onResize={resizeMain} title={t('app.resizeAnalysis')} />
         )}
 
         {/* Right: analysis panels (collapsible) */}
         {rightCollapsed ? (
           <button
             onClick={() => setRightCollapsed(false)}
-            title="Expand analysis panel"
-            aria-label="Expand analysis panel"
+            title={t('app.expandAnalysis')}
+            aria-label={t('app.expandAnalysis')}
             className="w-7 shrink-0 border-l border-border dark:border-border-dark bg-panel dark:bg-panel-dark hover:bg-accent/10 flex flex-col items-center justify-center gap-2 text-ink-muted dark:text-ink-dark-muted hover:text-accent transition-colors"
           >
             <span className="text-sm">‹</span>
@@ -292,9 +355,9 @@ export default function App() {
               </div>
               <button
                 onClick={() => setRightCollapsed(true)}
-                title="Collapse analysis panel"
+                title={t('app.collapseAnalysis')}
                 className="px-2.5 py-2 shrink-0 text-ink-muted dark:text-ink-dark-muted hover:text-accent transition-colors"
-                aria-label="Collapse analysis panel"
+                aria-label={t('app.collapseAnalysis')}
               >
                 ›
               </button>
@@ -302,15 +365,23 @@ export default function App() {
 
             {/* Panel Body */}
             <div className="flex-1 overflow-hidden animate-fade-in min-h-0">
-              {activePanel === 'overview' && <DashboardPanel />}
-              {activePanel === 'scanner' && <ScannerPanel />}
-              {activePanel === 'injection' && <InjectionPanel />}
-              {activePanel === 'threat' && <ThreatPanel />}
-              {activePanel === 'footprint' && <FootprintPanel />}
-              {activePanel === 'watermark' && <WatermarkPanel />}
-              {activePanel === 'optimizer' && <OptimizerPanel />}
-              {activePanel === 'plagiarism' && <PlagiarismPanel />}
-              {activePanel === 'report' && <ReportPanel />}
+              <PanelErrorBoundary
+                key={activePanel}
+                fallbackTitle={t('app.error.title')}
+                fallbackDesc={t('app.error.desc')}
+                resetLabel={t('app.error.reload')}
+                onReset={() => setActivePanel('overview')}
+              >
+                {activePanel === 'overview' && <DashboardPanel />}
+                {activePanel === 'scanner' && <ScannerPanel />}
+                {activePanel === 'injection' && <InjectionPanel />}
+                {activePanel === 'threat' && <ThreatPanel />}
+                {activePanel === 'footprint' && <FootprintPanel />}
+                {activePanel === 'watermark' && <WatermarkPanel />}
+                {activePanel === 'optimizer' && <OptimizerPanel />}
+                {activePanel === 'plagiarism' && <PlagiarismPanel />}
+                {activePanel === 'report' && <ReportPanel />}
+              </PanelErrorBoundary>
             </div>
           </div>
         )}

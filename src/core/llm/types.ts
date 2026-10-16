@@ -1,4 +1,15 @@
-export type LLMProvider = 'local' | 'ollama' | 'openai' | 'anthropic' | 'gemini' | 'uncensored-offline';
+export type LLMProvider =
+  | 'local'
+  | 'lmstudio'
+  | 'ollama'
+  | 'uncensored-offline'
+  | 'opencode-zen'
+  | 'pollinations-free'
+  | 'openrouter-free'
+  | 'groq-free'
+  | 'openai'
+  | 'anthropic'
+  | 'gemini';
 
 export interface LLMConfig {
   provider: LLMProvider;
@@ -20,7 +31,7 @@ export interface ProviderPreset {
   label: string;
   endpoint: string;
   model: string;
-  /** Whether an API key is required (Ollama runs locally without one). */
+  /** Whether an API key is required (Ollama and LM Studio run locally without one). */
   needsKey: boolean;
   /** Where the user obtains a key, shown in the config UI and Help. */
   keyUrl?: string;
@@ -42,12 +53,60 @@ export const PROVIDER_PRESETS: Record<LLMProvider, ProviderPreset> = {
     local: true,
     note: 'Runs a small AI model directly on your device. No account, no key, and your text never leaves your computer. The model downloads once, then works offline.',
   },
+  lmstudio: {
+    label: 'LM Studio (Local Server — 127.0.0.1:1234)',
+    endpoint: 'http://127.0.0.1:1234/v1',
+    model: 'local-model',
+    needsKey: false,
+    note: 'Runs locally on your machine via LM Studio (127.0.0.1:1234). Fully offline & private.',
+  },
   ollama: {
     label: 'Ollama (local)',
     endpoint: 'http://localhost:11434',
     model: 'llama3.1',
     needsKey: false,
     note: 'Runs fully on your machine. Nothing leaves the device.',
+  },
+  'uncensored-offline': {
+    label: 'Uncensored (offline, advanced)',
+    endpoint: 'http://localhost:11434',
+    model: 'dolphin-mistral',
+    needsKey: false,
+    warn: true,
+    note: 'Runs an unrestricted model locally via Ollama (nothing leaves your device). Reduced built-in safety filtering — use this to eliminate refusal risk on legitimate defensive/forensic analysis, not for general-purpose use. Try "ollama pull dolphin-mistral" or "dolphin-llama3" first.',
+  },
+  'opencode-zen': {
+    label: 'OpenCode Zen (Free AI Models)',
+    endpoint: 'https://opencode.ai/zen/v1',
+    model: 'gpt-5-nano',
+    needsKey: true,
+    keyUrl: 'https://opencode.ai/zen',
+    keyHint: 'Get free key at opencode.ai/zen',
+    note: 'Free OpenAI-compatible cloud models. Free API key required from opencode.ai/zen.',
+  },
+  'pollinations-free': {
+    label: 'Pollinations AI (100% Free — No API Key)',
+    endpoint: 'https://text.pollinations.ai/openai',
+    model: 'openai',
+    needsKey: false,
+    note: 'Community free text models. 100% free, no sign-up or API key needed.',
+  },
+  'openrouter-free': {
+    label: 'OpenRouter (Free Models Tier)',
+    endpoint: 'https://openrouter.ai/api/v1',
+    model: 'meta-llama/llama-3.3-70b-instruct:free',
+    needsKey: true,
+    keyUrl: 'https://openrouter.ai/keys',
+    keyHint: 'Get free key at openrouter.ai/keys',
+    note: 'Access state-of-the-art open models with a free OpenRouter key (openrouter.ai/keys).',
+  },
+  'groq-free': {
+    label: 'Groq Cloud (Free Fast Tier)',
+    endpoint: 'https://api.groq.com/openai/v1',
+    model: 'llama-3.3-70b-versatile',
+    needsKey: true,
+    keyUrl: 'https://console.groq.com/keys',
+    note: 'Ultra-fast LPU inference with a free Groq cloud key.',
   },
   openai: {
     label: 'OpenAI-compatible',
@@ -75,14 +134,6 @@ export const PROVIDER_PRESETS: Record<LLMProvider, ProviderPreset> = {
     keyUrl: 'https://aistudio.google.com/app/apikey',
     keyHint: 'aistudio.google.com → Get API key',
     note: 'Key is passed in the request URL (fine for personal use).',
-  },
-  'uncensored-offline': {
-    label: 'Uncensored (offline, advanced)',
-    endpoint: 'http://localhost:11434',
-    model: 'dolphin-mistral',
-    needsKey: false,
-    warn: true,
-    note: 'Runs an unrestricted model locally via Ollama (nothing leaves your device). Reduced built-in safety filtering — use this to eliminate refusal risk on legitimate defensive/forensic analysis, not for general-purpose use. Try "ollama pull dolphin-mistral" or "dolphin-llama3" first.',
   },
 };
 
@@ -220,11 +271,37 @@ export function isInstructLocalModel(modelId: string): boolean {
   return m ? m.supportsJsonAnalysis : false;
 }
 
+export const FREE_ONLINE_MODELS: Record<string, { id: string; label: string }[]> = {
+  'opencode-zen': [
+    { id: 'gpt-5-nano', label: 'GPT-5 Nano (Ultra-Fast)' },
+    { id: 'big-pickle', label: 'Big Pickle' },
+    { id: 'glm-4.7-free', label: 'GLM 4.7 (Free Cloud)' },
+    { id: 'minimax-m2.1-free', label: 'MiniMax M2.1 (Free)' },
+    { id: 'grok-code', label: 'Grok Code' },
+  ],
+  'pollinations-free': [
+    { id: 'openai', label: 'OpenAI GPT-4o-mini' },
+    { id: 'mistral', label: 'Mistral Nemo' },
+    { id: 'llama', label: 'Llama 3.3 70B' },
+    { id: 'qwen-coder', label: 'Qwen 2.5 Coder 32B' },
+  ],
+  'openrouter-free': [
+    { id: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B Instruct (Free)' },
+    { id: 'google/gemma-3-27b-it:free', label: 'Google Gemma 3 27B (Free)' },
+    { id: 'qwen/qwen-2.5-72b-instruct:free', label: 'Qwen 2.5 72B Instruct (Free)' },
+    { id: 'deepseek/deepseek-r1:free', label: 'DeepSeek R1 Reasoning (Free)' },
+  ],
+  'groq-free': [
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Ultra-Fast)' },
+  ],
+};
+
 export function canRunAI(appMode: 'offline' | 'online', config: LLMConfig): boolean {
   return (
     appMode === 'online' ||
     config.provider === 'local' ||
-    ((config.provider === 'ollama' || config.provider === 'uncensored-offline') &&
+    ((config.provider === 'ollama' || config.provider === 'uncensored-offline' || config.provider === 'lmstudio') &&
       (config.endpoint.includes('localhost') || config.endpoint.includes('127.0.0.1')))
   );
 }

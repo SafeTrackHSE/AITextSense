@@ -16,6 +16,8 @@ import {
   synthesizeKillChain,
 } from '../src/core/security/explainer';
 import { LOCAL_MODELS } from '../src/core/llm/local';
+import { PROVIDER_PRESETS } from '../src/core/llm/types';
+import { rewriteWithLLM } from '../src/core/llm/client';
 import { analyzePlagiarism } from '../src/core/plagiarism';
 import type { ReferenceDocument } from '../src/core/plagiarism/types';
 
@@ -350,4 +352,42 @@ describe('AI TextSense v3.0.0 Features & Adversarial Verification Test Suite', (
     });
   });
 
+  // =========================================================================
+  // Workstream 5: Free Online Providers & Key Validation
+  // =========================================================================
+  describe('Workstream 5: Free Cloud AI Providers & Key Validation', () => {
+    it('properly configures key requirements and URLs for free cloud providers', () => {
+      expect(PROVIDER_PRESETS['opencode-zen'].needsKey).toBe(true);
+      expect(PROVIDER_PRESETS['opencode-zen'].keyUrl).toBe('https://opencode.ai/zen');
+      expect(PROVIDER_PRESETS['openrouter-free'].needsKey).toBe(true);
+      expect(PROVIDER_PRESETS['openrouter-free'].keyUrl).toBe('https://openrouter.ai/keys');
+      expect(PROVIDER_PRESETS['pollinations-free'].needsKey).toBe(false);
+    });
+
+    it('rejects unauthenticated requests to key-requiring providers with a friendly error', async () => {
+      await expect(
+        rewriteWithLLM('test text', 'instruction', {
+          provider: 'openrouter-free',
+          endpoint: PROVIDER_PRESETS['openrouter-free'].endpoint,
+          model: PROVIDER_PRESETS['openrouter-free'].model,
+          apiKey: '',
+          maxTokens: 50,
+          temperature: 0.7,
+        })
+      ).rejects.toThrow(/Please enter an API key for OpenRouter/);
+
+      await expect(
+        rewriteWithLLM('test text', 'instruction', {
+          provider: 'opencode-zen',
+          endpoint: PROVIDER_PRESETS['opencode-zen'].endpoint,
+          model: PROVIDER_PRESETS['opencode-zen'].model,
+          apiKey: '',
+          maxTokens: 50,
+          temperature: 0.7,
+        })
+      ).rejects.toThrow(/Please enter an API key for OpenCode Zen/);
+    });
+  });
+
 });
+

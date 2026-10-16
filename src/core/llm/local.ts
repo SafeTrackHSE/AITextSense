@@ -72,6 +72,64 @@ export async function detectHardwareAcceleration(): Promise<'webgpu' | 'wasm'> {
   return 'wasm';
 }
 
+export interface HardwareProfile {
+  ramGb: number | null;
+  cores: number;
+  hasWebGpu: boolean;
+  tier: 'entry' | 'standard' | 'high-performance';
+  summary: string;
+  recommendations: Record<string, { recommended: boolean; badge: 'recommended' | 'suitable' | 'warning'; noteKey: string }>;
+}
+
+/** Evaluates client system hardware to recommend optimal on-device embedded AI models. */
+export async function evaluateHardwareProfile(): Promise<HardwareProfile> {
+  const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+  const ramGb = typeof navigator !== 'undefined' && (navigator as any).deviceMemory ? (navigator as any).deviceMemory : null;
+  let hasWebGpu = false;
+  if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
+    try {
+      const adapter = await (navigator as any).gpu.requestAdapter();
+      if (adapter) hasWebGpu = true;
+    } catch {}
+  }
+
+  const isHigh = hasWebGpu || (ramGb !== null && ramGb >= 8) || cores >= 8;
+  const isLow = !hasWebGpu && ((ramGb !== null && ramGb < 4) || cores <= 4);
+  const tier: 'entry' | 'standard' | 'high-performance' = isHigh ? 'high-performance' : isLow ? 'entry' : 'standard';
+
+  const recommendations: Record<string, { recommended: boolean; badge: 'recommended' | 'suitable' | 'warning'; noteKey: string }> = {
+    'Xenova/LaMini-Flan-T5-77M': {
+      recommended: tier === 'entry',
+      badge: tier === 'entry' ? 'recommended' : 'suitable',
+      noteKey: 'hub.model.77m.rec',
+    },
+    'Xenova/LaMini-Flan-T5-248M': {
+      recommended: tier === 'standard',
+      badge: 'suitable',
+      noteKey: 'hub.model.248m.rec',
+    },
+    'onnx-community/SmolLM2-360M-Instruct-ONNX': {
+      recommended: tier === 'standard' || tier === 'high-performance',
+      badge: 'recommended',
+      noteKey: 'hub.model.360m.rec',
+    },
+    'onnx-community/Qwen2.5-0.5B-Instruct': {
+      recommended: tier === 'high-performance',
+      badge: tier === 'high-performance' ? 'recommended' : tier === 'entry' ? 'warning' : 'suitable',
+      noteKey: 'hub.model.500m.rec',
+    },
+  };
+
+  return {
+    ramGb,
+    cores,
+    hasWebGpu,
+    tier,
+    summary: `${cores} CPU Cores${ramGb ? ` · ~${ramGb} GB RAM` : ''} · ${hasWebGpu ? 'WebGPU ⚡' : 'WASM (CPU)'}`,
+    recommendations,
+  };
+}
+
 /** Whether a model is already downloaded + ready in this session. */
 export function isModelReady(modelId: string): boolean {
   return pipelineCache.has(modelId);

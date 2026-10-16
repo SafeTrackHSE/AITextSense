@@ -1,5 +1,5 @@
 import type { LLMConfig, LLMResponse, LLMProvider } from './types';
-import { isInstructLocalModel } from './types';
+import { isInstructLocalModel, PROVIDER_PRESETS } from './types';
 import { generateLocalJSON } from './local';
 
 /** Appends a path segment to a base URL only if the URL doesn't already end with it. */
@@ -27,11 +27,186 @@ function assertEndpoint(endpoint: string): void {
  */
 function inferProvider(config: LLMConfig): LLMProvider {
   if (config.provider) return config.provider;
-  const ep = config.endpoint.toLowerCase();
+  const ep = (config.endpoint || '').toLowerCase();
   if (ep.includes('anthropic')) return 'anthropic';
   if (ep.includes('generativelanguage') || ep.includes('gemini')) return 'gemini';
+  if (ep.includes(':1234')) return 'lmstudio';
+  if (ep.includes('opencode')) return 'opencode-zen';
+  if (ep.includes('pollinations')) return 'pollinations-free';
+  if (ep.includes('openrouter')) return 'openrouter-free';
+  if (ep.includes('groq')) return 'groq-free';
   if (ep.includes('11434') || ep.includes('ollama') || ep.includes('/api/generate') || ep.includes('/api/chat')) return 'ollama';
   return 'openai';
+}
+
+/**
+ * Universal neutral fetch that works transparently across all operating systems,
+ * desktop runtimes (Tauri native IPC with zero CORS/PNA gates), and browser environments
+ * (with automatic IPv4 loopback fallback and Vite dev/preview server proxy).
+ */
+export async function neutralFetch(url: string, init?: RequestInit): Promise<Response> {
+  // Normalize headers helper
+  const extractHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (init?.headers) {
+      if (init.headers instanceof Headers) {
+        init.headers.forEach((v, k) => { headers[k] = v; });
+      } else if (Array.isArray(init.headers)) {
+        for (const [k, v] of init.headers) headers[k] = v;
+      } else {
+        Object.assign(headers, init.headers as Record<string, string>);
+      }
+    }
+    if (!headers['User-Agent'] && !headers['user-agent']) {
+      headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    }
+    return headers;
+  };
+
+  // 1. If running inside Tauri desktop app, use native Rust HTTP command (0 CORS, 0 PNA restrictions)
+  if (typeof window !== 'undefined') {
+    const tauri = (window as any).__TAURI__ || (window as any).__TAURI_INTERNALS__;
+    const invoke = tauri?.core?.invoke || tauri?.invoke;
+    if (typeof invoke === 'function') {
+      try {
+        const headers = extractHeaders();
+        const bodyStr = typeof init?.body === 'string' ? init.body : undefined;
+        const res: { status: number; body: string; headers: Record<string, string> } = await invoke('native_http_request', {
+          url,
+          method: init?.method || 'GET',
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          body: bodyStr,
+        });
+
+        return new Response(res.body, {
+          status: res.status,
+          headers: res.headers,
+        });
+      } catch {
+        // Fall back to standard fetch if invoke encounters an internal error
+      }
+    }
+  }
+
+  // Helper to dispatch through Vite /api/llm-proxy
+  const callProxy = async (targetUrl: string): Promise<Response | null> => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const headers = extractHeaders();
+      const proxyRes = await fetch('/api/llm-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: targetUrl,
+          method: init?.method || 'GET',
+          headers,
+          body: init?.body,
+        }),
+      });
+      if (
+        proxyRes.ok ||
+        proxyRes.status === 400 ||
+        proxyRes.status === 401 ||
+        proxyRes.status === 403 ||
+        proxyRes.status === 404 ||
+        proxyRes.status === 500
+      ) {
+        return proxyRes;
+      }
+    } catch {
+      // Proxy not running or failed
+    }
+    return null;
+  };
+
+  // 2. Cloud endpoints that Cloudflare Turnstile blocks from browser origins (e.g. Pollinations, OpenCode)
+  // route through /api/llm-proxy immediately when in browser
+  const isCloudTurnstileTarget = url.includes('pollinations.ai') || url.includes('opencode.ai');
+  if (isCloudTurnstileTarget) {
+    const proxyRes = await callProxy(url);
+    if (proxyRes) return proxyRes;
+  }
+
+  // 3. Direct browser fetch with automatic localhost <-> 127.0.0.1 dual-stack fallback
+  try {
+    const res = await fetch(url, init);
+    // If direct fetch returned 403 (Turnstile or Cloudflare protection) or CORS blocked, retry via proxy
+    if (res.status === 403 && !isCloudTurnstileTarget) {
+      const clone = res.clone();
+      const text = await clone.text().catch(() => '');
+      if (text.includes('Turnstile') || text.includes('1010') || text.includes('Cloudflare')) {
+        const proxyRes = await callProxy(url);
+        if (proxyRes) return proxyRes;
+      }
+    }
+    return res;
+  } catch (err: any) {
+    // If connection refused on localhost, try 127.0.0.1 immediately
+    if (url.includes('localhost')) {
+      const altUrl = url.replace('localhost', '127.0.0.1');
+      try {
+        return await fetch(altUrl, init);
+      } catch {
+        // Fall through to proxy
+      }
+    } else if (url.includes('127.0.0.1')) {
+      const altUrl = url.replace('127.0.0.1', 'localhost');
+      try {
+        return await fetch(altUrl, init);
+      } catch {
+        // Fall through to proxy
+      }
+    }
+
+    // 4. Proxy fallback
+    const proxyRes = await callProxy(url);
+    if (proxyRes) return proxyRes;
+
+    throw err;
+  }
+}
+
+/** Fetches currently available / loaded models from an endpoint (LM Studio, Ollama, etc.) */
+export async function fetchAvailableModels(config: LLMConfig): Promise<string[]> {
+  const ep = (config.endpoint || '').trim().replace(/\/+$/, '');
+  if (!ep) return [];
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
+
+  try {
+    const isOllama = config.provider === 'ollama' || config.provider === 'uncensored-offline' || ep.includes(':11434');
+    const isOpenAI = !isOllama || ep.includes(':1234') || ep.includes('/v1') || ep.includes('/chat/completions');
+
+    if (isOpenAI) {
+      const modelsUrl = ep.endsWith('/v1')
+        ? `${ep}/models`
+        : ep.includes('/v1')
+          ? buildUrl(ep, '/models')
+          : `${ep}/v1/models`;
+      const res = await neutralFetch(modelsUrl, { headers, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.data)) {
+          return data.data.map((m: any) => (typeof m === 'string' ? m : m.id)).filter(Boolean);
+        }
+      }
+    }
+
+    if (isOllama) {
+      const tagsUrl = buildUrl(ep, '/api/tags');
+      const res = await neutralFetch(tagsUrl, { headers, signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.models)) {
+          return data.models.map((m: any) => m.name).filter(Boolean);
+        }
+      }
+    }
+  } catch {
+    // Graceful fallback on network timeout/failure
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -116,12 +291,23 @@ export async function generateJSON<T = unknown>(
   try {
     assertEndpoint(config.endpoint);
     switch (provider) {
-      case 'openai':    return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+      case 'openai':
+      case 'lmstudio':
+      case 'opencode-zen':
+      case 'pollinations-free':
+      case 'openrouter-free':
+      case 'groq-free':
+        return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
       case 'gemini':     return await geminiGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
       case 'anthropic':  return await anthropicGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
       case 'ollama':
       case 'uncensored-offline':
+        if (config.endpoint.includes('1234') || config.endpoint.replace(/\/+$/, '').endsWith('/v1') || config.endpoint.includes('/chat/completions')) {
+          return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+        }
         return await ollamaGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+      default:
+        return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
     }
   } catch (err) {
     return {
@@ -135,6 +321,22 @@ export async function generateJSON<T = unknown>(
 async function openAIGenerateJSON<T>(
   systemPrompt: string, userContent: string, config: LLMConfig, spec: JSONModeSpec, start: number,
 ): Promise<JSONModeResult<T>> {
+  const p = inferProvider(config);
+  const preset = PROVIDER_PRESETS[p];
+  if (preset?.needsKey && !config.apiKey?.trim()) {
+    throw new Error(`Please enter an API key for ${preset.label}. Click 'Get key' to generate your free key.`);
+  }
+
+  let modelName = config.model;
+  const isLocalServer = config.endpoint.includes('localhost') || config.endpoint.includes('127.0.0.1');
+
+  if (isLocalServer && (!modelName || modelName === 'local-model' || modelName === 'llama3.2')) {
+    const detected = await fetchAvailableModels(config);
+    if (detected.length > 0) {
+      modelName = detected[0];
+    }
+  }
+
   const ep = config.endpoint.replace(/\/+$/, '');
   const url = ep.endsWith('/chat/completions') ? ep : ep.includes('/v1') ? buildUrl(ep, '/chat/completions') : buildUrl(ep, '/v1/chat/completions');
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -144,16 +346,44 @@ async function openAIGenerateJSON<T>(
   // regardless of what the caller's systemPrompt says.
   const jsonInstruction = `${systemPrompt}\n\nRespond ONLY with a single valid JSON object matching this shape: ${JSON.stringify(spec.schema)}`;
 
-  const response = await fetch(url, {
-    method: 'POST', headers,
-    body: JSON.stringify({
-      model: config.model,
+  const postJSON = async (m: string, withFormat: boolean) => {
+    const body: Record<string, any> = {
+      model: m,
       messages: [{ role: 'system', content: jsonInstruction }, { role: 'user', content: userContent }],
-      response_format: { type: 'json_object' },
       max_tokens: config.maxTokens,
       temperature: config.temperature,
-    }),
-  }).catch(err => { throw new Error(`Cannot reach API at "${url}". (${err instanceof Error ? err.message : err})`); });
+    };
+    if (withFormat) {
+      body.response_format = { type: 'json_object' };
+    }
+    return await neutralFetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  };
+
+  let response: Response;
+  try {
+    response = await postJSON(modelName, true);
+    // If 400 (e.g. LM Studio GGUF template rejects response_format: json_object), retry without response_format
+    if (response.status === 400) {
+      const errText = await response.clone().text().catch(() => '');
+      if (errText.includes('response_format') || isLocalServer) {
+        response = await postJSON(modelName, false);
+      }
+    }
+    // If local server returned 404 or 400 (model not found), retry with fetched model
+    if (!response.ok && isLocalServer && (response.status === 400 || response.status === 404)) {
+      const detected = await fetchAvailableModels(config);
+      if (detected.length > 0 && detected[0] !== modelName) {
+        modelName = detected[0];
+        response = await postJSON(modelName, false);
+      }
+    }
+  } catch (err) {
+    throw new Error(`Cannot reach API at "${url}". (${err instanceof Error ? err.message : err})`);
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -161,7 +391,12 @@ async function openAIGenerateJSON<T>(
   }
 
   const data = await response.json();
-  const raw: string = data.choices?.[0]?.message?.content ?? '';
+  const msg = data.choices?.[0]?.message;
+  let raw: string = (msg?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!raw && msg?.reasoning_content) {
+    const jsonMatch = msg.reasoning_content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) raw = jsonMatch[0];
+  }
   const parsed = tryParseJSON<T>(raw);
   return { data: parsed, raw, parseError: parsed === null, declinedTool: false, durationMs: performance.now() - start };
 }
@@ -175,7 +410,7 @@ async function geminiGenerateJSON<T>(
 
   const jsonInstruction = `${systemPrompt}\n\nRespond ONLY with a single valid JSON object matching this shape: ${JSON.stringify(spec.schema)}`;
 
-  const response = await fetch(url, {
+  const response = await neutralFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -205,7 +440,7 @@ async function anthropicGenerateJSON<T>(
   if (!config.apiKey) throw new Error('Anthropic requires an API key. Get one at console.anthropic.com → Settings → API keys.');
   const url = buildUrl(config.endpoint, '/v1/messages');
 
-  const response = await fetch(url, {
+  const response = await neutralFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -249,24 +484,44 @@ async function anthropicGenerateJSON<T>(
 async function ollamaGenerateJSON<T>(
   systemPrompt: string, userContent: string, config: LLMConfig, spec: JSONModeSpec, start: number,
 ): Promise<JSONModeResult<T>> {
+  if (config.endpoint.includes('1234') || config.endpoint.replace(/\/+$/, '').endsWith('/v1') || config.endpoint.includes('/chat/completions')) {
+    return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+  }
+
   const url = buildUrl(config.endpoint, '/api/generate');
   const prompt = `${systemPrompt}\n\nRespond ONLY with a single valid JSON object matching this shape: ${JSON.stringify(spec.schema)}\n\n${userContent}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.model,
-      prompt,
-      // Grammar-constrained JSON decoding — the strongest reliability guarantee of the four
-      // providers, and it works fully offline.
-      format: 'json',
-      stream: false,
-      options: { temperature: config.temperature, num_predict: config.maxTokens },
-    }),
-  }).catch(err => { throw new Error(`Cannot reach Ollama at "${url}". Is Ollama running? (${err instanceof Error ? err.message : err})`); });
+  let response: Response;
+  try {
+    response = await neutralFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: config.model,
+        prompt,
+        // Grammar-constrained JSON decoding — the strongest reliability guarantee of the four
+        // providers, and it works fully offline.
+        format: 'json',
+        stream: false,
+        options: { temperature: config.temperature, num_predict: config.maxTokens },
+      }),
+    });
+  } catch (err) {
+    try {
+      return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+    } catch {
+      throw new Error(`Cannot reach Ollama at "${url}". Is Ollama running? (${err instanceof Error ? err.message : err})`);
+    }
+  }
 
   if (!response.ok) {
+    if (response.status === 404 || response.status === 400) {
+      try {
+        return await openAIGenerateJSON<T>(systemPrompt, userContent, config, spec, start);
+      } catch {
+        /* fall through to error */
+      }
+    }
     const body = await response.text().catch(() => '');
     throw new Error(`Ollama ${response.status}: ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`);
   }
@@ -290,14 +545,33 @@ export async function rewriteWithLLM(
 ): Promise<LLMResponse> {
   assertEndpoint(config.endpoint);
   const start = performance.now();
+  const provider = inferProvider(config);
+  const ep = (config.endpoint || '').toLowerCase();
+  const isLikelyOpenAI =
+    ep.includes('1234') ||
+    ep.endsWith('/v1') ||
+    ep.includes('/chat/completions') ||
+    ep.includes('groq') ||
+    ep.includes('pollinations') ||
+    ep.includes('openrouter') ||
+    ep.includes('opencode');
 
-  switch (inferProvider(config)) {
-    case 'ollama':
-    case 'uncensored-offline':
-      return ollamaGenerate(text, instruction, config, start);
+  if (provider === 'ollama' || provider === 'uncensored-offline') {
+    if (isLikelyOpenAI) {
+      return openAIGenerate(text, instruction, config, start);
+    }
+    return ollamaGenerate(text, instruction, config, start);
+  }
+
+  switch (provider) {
     case 'anthropic': return anthropicGenerate(text, instruction, config, start);
     case 'gemini':    return geminiGenerate(text, instruction, config, start);
     case 'openai':
+    case 'lmstudio':
+    case 'opencode-zen':
+    case 'pollinations-free':
+    case 'openrouter-free':
+    case 'groq-free':
     default:          return openAIGenerate(text, instruction, config, start);
   }
 }
@@ -305,12 +579,16 @@ export async function rewriteWithLLM(
 async function ollamaGenerate(
   text: string, instruction: string, config: LLMConfig, start: number,
 ): Promise<LLMResponse> {
+  if (config.endpoint.includes('1234') || config.endpoint.replace(/\/+$/, '').endsWith('/v1') || config.endpoint.includes('/chat/completions')) {
+    return openAIGenerate(text, instruction, config, start);
+  }
+
   const url = buildUrl(config.endpoint, '/api/generate');
   const prompt = `${instruction}\n\nText:\n${text}\n\nRewritten text:`;
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await neutralFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -321,12 +599,23 @@ async function ollamaGenerate(
       }),
     });
   } catch (err) {
-    throw new Error(
-      `Cannot reach Ollama at "${url}". Is Ollama running? (${err instanceof Error ? err.message : err})`
-    );
+    try {
+      return await openAIGenerate(text, instruction, config, start);
+    } catch {
+      throw new Error(
+        `Cannot reach Ollama at "${url}". Is Ollama running? (${err instanceof Error ? err.message : err})`
+      );
+    }
   }
 
   if (!response.ok) {
+    if (response.status === 404 || response.status === 400) {
+      try {
+        return await openAIGenerate(text, instruction, config, start);
+      } catch {
+        /* fall through to error */
+      }
+    }
     const body = await response.text().catch(() => '');
     throw new Error(`Ollama ${response.status}: ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`);
   }
@@ -338,6 +627,22 @@ async function ollamaGenerate(
 async function openAIGenerate(
   text: string, instruction: string, config: LLMConfig, start: number,
 ): Promise<LLMResponse> {
+  const p = inferProvider(config);
+  const preset = PROVIDER_PRESETS[p];
+  if (preset?.needsKey && !config.apiKey?.trim()) {
+    throw new Error(`Please enter an API key for ${preset.label}. Click 'Get key' to generate your free key.`);
+  }
+
+  let modelName = config.model;
+  const isLocalServer = config.endpoint.includes('localhost') || config.endpoint.includes('127.0.0.1');
+
+  if (isLocalServer && (!modelName || modelName === 'local-model' || modelName === 'llama3.2')) {
+    const detected = await fetchAvailableModels(config);
+    if (detected.length > 0) {
+      modelName = detected[0];
+    }
+  }
+
   const ep = config.endpoint.replace(/\/+$/, '');
   const url = ep.endsWith('/chat/completions')
     ? ep
@@ -348,21 +653,35 @@ async function openAIGenerate(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
+  const estimatedTokens = Math.ceil(text.length / 3);
+  const tokenBudget = Math.max(config.maxTokens || 2048, estimatedTokens + 2048);
+
+  const doFetch = async (m: string) => {
+    return await neutralFetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: config.model,
+        model: m,
         messages: [
           { role: 'system', content: instruction },
           { role: 'user', content: text },
         ],
-        max_tokens: config.maxTokens,
+        max_tokens: isLocalServer ? tokenBudget : config.maxTokens,
         temperature: config.temperature,
       }),
     });
+  };
+
+  let response: Response;
+  try {
+    response = await doFetch(modelName);
+    if (!response.ok && isLocalServer && (response.status === 400 || response.status === 404)) {
+      const detected = await fetchAvailableModels(config);
+      if (detected.length > 0 && detected[0] !== modelName) {
+        modelName = detected[0];
+        response = await doFetch(modelName);
+      }
+    }
   } catch (err) {
     throw new Error(
       `Cannot reach API at "${url}". Check the endpoint URL and that the server is running. (${err instanceof Error ? err.message : err})`
@@ -375,8 +694,34 @@ async function openAIGenerate(
   }
 
   const data = await response.json();
+  const msg = data.choices?.[0]?.message;
+  let outText = msg?.content?.trim() ?? '';
+
+  // Sanitize any inline <think> tags if model emitted them in content
+  outText = outText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  // If content is empty, handle reasoning models cleanly without leaking raw thought traces
+  if (!outText) {
+    const finishReason = data.choices?.[0]?.finish_reason;
+    if (finishReason === 'length') {
+      throw new Error(
+        `The reasoning model (${modelName}) ran out of tokens during its thinking process before generating the final text. Please try selecting a shorter text segment or increasing Max Tokens.`
+      );
+    }
+    const rc = msg?.reasoning_content?.trim() ?? '';
+    // Look for explicit rewritten answer inside scratchpad if present
+    const answerMatch = rc.match(/(?:(?:final\s+)?rewrite|output|rewritten\s+text):\s*["']?([\s\S]+?)(?:["']?\s*$)/i);
+    if (answerMatch && answerMatch[1].trim().length > 20) {
+      outText = answerMatch[1].trim();
+    } else {
+      throw new Error(
+        `The reasoning model (${modelName}) completed thinking but did not produce a final response. Please re-run or choose a general instruction model.`
+      );
+    }
+  }
+
   return {
-    text: data.choices?.[0]?.message?.content?.trim() ?? '',
+    text: outText,
     tokensUsed: data.usage?.total_tokens ?? 0,
     durationMs: performance.now() - start,
   };
@@ -390,7 +735,7 @@ async function anthropicGenerate(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await neutralFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -435,7 +780,7 @@ async function geminiGenerate(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await neutralFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -465,7 +810,7 @@ async function geminiGenerate(
 export async function testConnection(config: LLMConfig): Promise<{ ok: boolean; error?: string }> {
   try {
     const result = await rewriteWithLLM('ping', 'Reply with the word "ok" only.', config);
-    return { ok: result.text.length > 0 };
+    return { ok: result !== null && typeof result.durationMs === 'number' };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

@@ -21,13 +21,31 @@ export async function openExternal(url: string): Promise<void> {
     }
   }
 
-  const win = window.open(url, '_blank', 'noopener,noreferrer');
-  if (win) return;
+  // Web path: In modern browsers, window.open with 'noopener' returns null by spec.
+  // Using an anchor click dispatch is the standard, reliable mechanism that avoids false-positive alerts.
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return;
+  } catch {
+    try {
+      window.open(url, '_blank');
+      return;
+    } catch {
+      // Fall through to clipboard
+    }
+  }
 
   try {
     await navigator.clipboard.writeText(url);
-    alert(`Couldn't open a browser window automatically. The link was copied to your clipboard — paste it into a browser:\n\n${url}`);
+    alert(`Link copied to clipboard:\n\n${url}`);
   } catch {
     alert(`Open this link in your browser:\n\n${url}`);
   }
 }
+

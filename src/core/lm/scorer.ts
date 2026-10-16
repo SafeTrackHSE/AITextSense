@@ -73,9 +73,17 @@ async function getLM(
       const tokenizer = await AutoTokenizer.from_pretrained(modelId);
       let model;
       try {
-        model = await AutoModelForCausalLM.from_pretrained(modelId, { device, dtype: 'q8' });
+        model = await AutoModelForCausalLM.from_pretrained(modelId, { device, dtype: 'q4' });
       } catch {
-        model = await AutoModelForCausalLM.from_pretrained(modelId, { device: 'wasm', dtype: 'q8' });
+        try {
+          model = await AutoModelForCausalLM.from_pretrained(modelId, { device: 'wasm', dtype: 'q4' });
+        } catch {
+          try {
+            model = await AutoModelForCausalLM.from_pretrained(modelId, { device: 'wasm', dtype: 'q8' });
+          } catch {
+            model = await AutoModelForCausalLM.from_pretrained(modelId, { device: 'wasm', dtype: 'fp32' });
+          }
+        }
       }
       onProgress?.({ status: 'ready', percent: 100, message: 'Scorer ready.' });
       return { tokenizer, model };

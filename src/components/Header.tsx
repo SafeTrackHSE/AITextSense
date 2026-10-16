@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../store';
 import HelpModal from './HelpModal';
 import { useT, LANGUAGES, type Language } from '../i18n';
-import logoImg from '../assets/AITextSense_Logo.png';
 import horizontalLogo from '../assets/AITextSense_Horizontal.png';
 import { APP_VERSION, APP_TAGLINE } from '../version';
 import { isModelReady } from '../core/llm/local';
@@ -138,19 +137,11 @@ export default function Header() {
         className="border-b border-border dark:border-border-dark px-4 py-2 flex items-center justify-between bg-surface dark:bg-surface-dark shrink-0 select-none cursor-default"
       >
         <div data-tauri-drag-region className="flex items-center gap-2.5 min-w-0">
-          <div data-tauri-drag-region className="relative flex items-center justify-center pointer-events-none">
-            <img
-              src={logoImg}
-              alt="AI TextSense Logo"
-              className="w-7 h-7 rounded-md object-contain shadow-sm border border-slate-700/40"
-              data-tauri-drag-region
-            />
-          </div>
           <div data-tauri-drag-region className="flex items-center gap-2 min-w-0 pointer-events-none">
             <img
               src={horizontalLogo}
               alt="AI TextSense"
-              className="h-5 w-auto object-contain brightness-95 dark:brightness-105 shrink-0"
+              className="h-7 w-auto object-contain brightness-95 dark:brightness-105 shrink-0"
               data-tauri-drag-region
             />
             <span data-tauri-drag-region className="text-[11px] text-ink-muted dark:text-ink-dark-muted font-mono hidden md:inline shrink-0">|</span>

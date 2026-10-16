@@ -31,7 +31,25 @@ dist-portable
 *.sln
 *.sw?
 
-# Environment
+# Environment & Secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cert
+credentials*
+secrets*
+*.token
+
+# OS & Caches
+.DS_Store
+Thumbs.db
+ehthumbs.db
+.Spotlight-V100
+.Trashes
+.history/
+

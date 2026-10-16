@@ -30,20 +30,20 @@ const REDO_ICON = (
   </svg>
 );
 
-function getSourceBadge(source: MutationSource) {
+function getSourceBadge(source: MutationSource, t: (k: any) => string) {
   switch (source) {
     case 'scanner-clean':
-      return { label: 'Unicode Clean', color: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' };
+      return { label: t('diff.source.scanner'), color: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30' };
     case 'injection-neutralize':
-      return { label: 'Injection Neutralize', color: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30' };
+      return { label: t('diff.source.injection'), color: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30' };
     case 'watermark-neutralize':
-      return { label: 'Watermark Neutralize', color: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' };
+      return { label: t('diff.source.watermark'), color: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30' };
     case 'footprint-scrub':
-      return { label: 'Fingerprint Scrub', color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' };
+      return { label: t('diff.source.footprint'), color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' };
     case 'roundtrip-regen':
-      return { label: 'Roundtrip Regen', color: 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30' };
+      return { label: t('diff.source.regen'), color: 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30' };
     default:
-      return { label: 'Mutation', color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30' };
+      return { label: t('diff.mutations'), color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30' };
   }
 }
 
@@ -117,7 +117,7 @@ export default function DiffView() {
                   ? 'bg-success-muted text-success dark:text-emerald-400'
                   : 'btn-ghost text-ink-muted dark:text-ink-dark-muted hover:text-accent'
               }`}
-              title="Copy text to clipboard"
+              title={t('diff.copyTitle')}
               aria-label="Copy text"
             >
               {copied ? CHECK_ICON : COPY_ICON}
@@ -127,7 +127,7 @@ export default function DiffView() {
         </div>
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-ink-faint dark:text-ink-dark-faint text-xs">
           <p>{t('diff.empty')}</p>
-          <p className="text-[11px] mt-1 opacity-70">Apply cleanups, prompt injection neutralization, watermark removals, or AI fingerprint scrubs to inspect changes here.</p>
+          <p className="text-[11px] mt-1 opacity-70">{t('diff.emptyHint')}</p>
         </div>
       </div>
     );
@@ -136,7 +136,7 @@ export default function DiffView() {
   const origChars = Array.from(originalText);
   const cleanChars = Array.from(cleanedText);
   const removed = origChars.length - cleanChars.length;
-  const badge = latestMutation ? getSourceBadge(latestMutation.source) : null;
+  const badge = latestMutation ? getSourceBadge(latestMutation.source, t) : null;
 
   return (
     <div className="flex flex-col h-full select-text">
@@ -149,7 +149,7 @@ export default function DiffView() {
               <button
                 onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
                 className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${badge.color} hover:opacity-90`}
-                title="Click to view mutation history stack"
+                title={t('diff.historyTitle')}
               >
                 <span>{badge.label}</span>
                 <span className="opacity-70">({mutationHistory.length})</span>
@@ -163,7 +163,7 @@ export default function DiffView() {
                   </div>
                   <div className="max-h-48 overflow-y-auto space-y-1">
                     {mutationHistory.map((m, idx) => {
-                      const b = getSourceBadge(m.source);
+                      const b = getSourceBadge(m.source, t);
                       return (
                         <div key={idx} className="flex items-center justify-between gap-1 p-1 rounded bg-panel dark:bg-panel-dark text-[11px]">
                           <span className="truncate text-ink dark:text-ink-dark font-mono">{idx + 1}. {m.label}</span>
@@ -246,7 +246,7 @@ export default function DiffView() {
                 ? 'bg-success-muted text-success dark:text-emerald-400'
                 : 'btn-ghost text-ink-muted dark:text-ink-dark-muted hover:text-accent'
             }`}
-            title="Copy cleaned text to clipboard"
+            title={t('diff.copyTitle')}
             aria-label="Copy cleaned text"
           >
             {copied ? CHECK_ICON : COPY_ICON}

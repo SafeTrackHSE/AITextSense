@@ -1,18 +1,49 @@
 import { useCallback, useState, useEffect } from 'react';
 import { useStore } from '../store';
-import { testConnection } from '../core/llm/client';
-import { PROVIDER_PRESETS, LOCAL_MODELS, LOCAL_AUX_MODELS, type LocalModelOption } from '../core/llm/types';
+import { testConnection, fetchAvailableModels } from '../core/llm/client';
+import {
+  PROVIDER_PRESETS,
+  LOCAL_MODELS,
+  LOCAL_AUX_MODELS,
+  FREE_ONLINE_MODELS,
+  type LocalModelOption,
+} from '../core/llm/types';
 import type { LLMProvider } from '../core/llm/types';
 import {
   preloadLocalModel,
   isModelReady,
   detectHardwareAcceleration,
+  evaluateHardwareProfile,
+  type HardwareProfile,
   getModelStorage,
   clearModelStorage,
 } from '../core/llm/local';
 import type { LocalProgress } from '../core/llm/local';
 import { openExternal } from '../lib/openExternal';
 import { useT } from '../i18n';
+
+function getModelMeta(id: string, defaultLabel: string, defaultBlurb: string, t: (k: string) => string) {
+  const map: Record<string, { labelKey: string; blurbKey: string; recKey: string }> = {
+    'Xenova/LaMini-Flan-T5-77M': { labelKey: 'hub.model.77m.label', blurbKey: 'hub.model.77m.blurb', recKey: 'hub.model.77m.rec' },
+    'Xenova/LaMini-Flan-T5-248M': { labelKey: 'hub.model.248m.label', blurbKey: 'hub.model.248m.blurb', recKey: 'hub.model.248m.rec' },
+    'onnx-community/SmolLM2-360M-Instruct-ONNX': { labelKey: 'hub.model.360m.label', blurbKey: 'hub.model.360m.blurb', recKey: 'hub.model.360m.rec' },
+    'onnx-community/Qwen2.5-0.5B-Instruct': { labelKey: 'hub.model.500m.label', blurbKey: 'hub.model.500m.blurb', recKey: 'hub.model.500m.rec' },
+    'onnx-community/SmolLM2-135M-ONNX': { labelKey: 'hub.aux.smollm.label', blurbKey: 'hub.aux.smollm.blurb', recKey: '' },
+    'Xenova/gpt2': { labelKey: 'hub.aux.gpt2.label', blurbKey: 'hub.aux.gpt2.blurb', recKey: '' },
+    'Xenova/all-MiniLM-L6-v2': { labelKey: 'hub.aux.minilm.label', blurbKey: 'hub.aux.minilm.blurb', recKey: '' },
+  };
+
+  const entry = map[id];
+  if (!entry) return { label: defaultLabel, blurb: defaultBlurb, rec: '' };
+  const label = t(entry.labelKey);
+  const blurb = t(entry.blurbKey);
+  const rec = entry.recKey ? t(entry.recKey) : '';
+  return {
+    label: label !== entry.labelKey ? label : defaultLabel,
+    blurb: blurb !== entry.blurbKey ? blurb : defaultBlurb,
+    rec: rec !== entry.recKey ? rec : '',
+  };
+}
 
 const PLUG_ICON = (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -27,8 +58,20 @@ const BRAIN_ICON = (
   </svg>
 );
 
-const ALL_PROVIDERS: LLMProvider[] = ['local', 'ollama', 'uncensored-offline', 'openai', 'anthropic', 'gemini'];
-const OFFLINE_SAFE_PROVIDERS: LLMProvider[] = ['local', 'ollama', 'uncensored-offline'];
+const ALL_PROVIDERS: LLMProvider[] = [
+  'local',
+  'lmstudio',
+  'ollama',
+  'uncensored-offline',
+  'opencode-zen',
+  'pollinations-free',
+  'openrouter-free',
+  'groq-free',
+  'openai',
+  'anthropic',
+  'gemini',
+];
+const OFFLINE_SAFE_PROVIDERS: LLMProvider[] = ['local', 'lmstudio', 'ollama', 'uncensored-offline'];
 
 export default function LLMConfigPanel() {
   const { llmConfig, setLLMConfig, llmConnected, setLLMConnected, appMode, openHelp } = useStore();
@@ -39,14 +82,59 @@ export default function LLMConfigPanel() {
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [storage, setStorage] = useState<{ files: number; usageMb: number | null; supported: boolean } | null>(null);
   const [hwAccel, setHwAccel] = useState<'webgpu' | 'wasm'>('wasm');
+  const [hwProfile, setHwProfile] = useState<HardwareProfile | null>(null);
   const [hubOpen, setHubOpen] = useState(false);
+  const [detectedModels, setDetectedModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
 
   useEffect(() => {
     detectHardwareAcceleration().then(setHwAccel);
+    evaluateHardwareProfile().then(setHwProfile);
   }, []);
 
   const availableProviders = appMode === 'offline' ? OFFLINE_SAFE_PROVIDERS : ALL_PROVIDERS;
   const isLocal = llmConfig.provider === 'local';
+  const isLocalServer = ['lmstudio', 'ollama', 'uncensored-offline'].includes(llmConfig.provider);
+  const freeModels = FREE_ONLINE_MODELS[llmConfig.provider];
+
+  const handleDetectModels = useCallback(async () => {
+    if (!isLocalServer) return;
+    setFetchingModels(true);
+    try {
+      const models = await fetchAvailableModels(llmConfig);
+      setDetectedModels(models);
+      if (models.length > 0) {
+        const cur = (llmConfig.model || '').toLowerCase();
+        const matching = models.find(m => m.toLowerCase().includes(cur) || (cur && cur.includes(m.toLowerCase())));
+        setLLMConfig({ model: matching || models[0] });
+      }
+    } catch {
+      // ignore
+    } finally {
+      setFetchingModels(false);
+    }
+  }, [isLocalServer, llmConfig, setLLMConfig]);
+
+  useEffect(() => {
+    if (isLocalServer) {
+      fetchAvailableModels(llmConfig)
+        .then(models => {
+          setDetectedModels(models);
+          if (models.length > 0 && (!llmConfig.model || llmConfig.model === 'local-model' || llmConfig.model === 'llama3.2')) {
+            setLLMConfig({ model: models[0] });
+          } else if (models.length > 0 && llmConfig.model) {
+            const cur = llmConfig.model.toLowerCase();
+            const matching = models.find(m => m.toLowerCase().includes(cur) || cur.includes(m.toLowerCase()));
+            if (matching && matching !== llmConfig.model) {
+              setLLMConfig({ model: matching });
+            }
+          }
+        })
+        .catch(() => {});
+    } else {
+      setDetectedModels([]);
+    }
+  }, [llmConfig.provider, llmConfig.endpoint, isLocalServer]);
 
   const refreshStorage = useCallback(() => {
     getModelStorage().then(setStorage);
@@ -72,6 +160,14 @@ export default function LLMConfigPanel() {
   }, [setLLMConfig, setLLMConnected]);
 
   const handleTest = useCallback(async () => {
+    const currentPreset = PROVIDER_PRESETS[llmConfig.provider] ?? PROVIDER_PRESETS.local;
+    if (currentPreset.needsKey && !llmConfig.apiKey?.trim()) {
+      setTestError(
+        `Please enter an API key for ${currentPreset.label}. Click 'Get key' to generate your free key.`
+      );
+      setLLMConnected(false);
+      return;
+    }
     setTesting(true);
     setTestError(null);
     const result = await testConnection(llmConfig);
@@ -101,7 +197,7 @@ export default function LLMConfigPanel() {
       <div className="flex items-center gap-2 px-4 py-2 flex-wrap">
         <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-faint dark:text-ink-dark-faint shrink-0">
           {isLocal ? BRAIN_ICON : PLUG_ICON}
-          {isLocal ? t('hub.title') : 'LLM Provider'}
+          {isLocal ? t('hub.title') : t('llm.provider')}
         </span>
 
         {/* Hardware Acceleration Indicator */}
@@ -139,11 +235,14 @@ export default function LLMConfigPanel() {
               className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50"
               aria-label="On-device model"
             >
-              {LOCAL_MODELS.map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.label} · ~{m.approxSizeMb} MB {m.supportsJsonAnalysis ? '✓ JSON' : ''}
-                </option>
-              ))}
+              {LOCAL_MODELS.map(m => {
+                const meta = getModelMeta(m.id, m.label, m.blurb, t);
+                return (
+                  <option key={m.id} value={m.id}>
+                    {meta.label} · ~{m.approxSizeMb} MB {m.supportsJsonAnalysis ? '✓ JSON' : ''}
+                  </option>
+                );
+              })}
             </select>
 
             <button
@@ -165,7 +264,7 @@ export default function LLMConfigPanel() {
               }`}
               title="Explore all on-device models and capabilities"
             >
-              {hubOpen ? 'Close Hub ▴' : 'Models Catalog ▾'}
+              {hubOpen ? t('llm.closeHub') : t('llm.modelsCatalog')}
             </button>
 
             {/* Which Model Should I Pick? guide button */}
@@ -206,20 +305,81 @@ export default function LLMConfigPanel() {
                 type="password"
                 value={llmConfig.apiKey ?? ''}
                 onChange={e => setLLMConfig({ apiKey: e.target.value })}
-                placeholder="API Key"
-                className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 w-28"
+                placeholder={preset.keyHint ?? "API Key"}
+                title={preset.keyHint ?? "Enter API Key"}
+                className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 w-32"
                 aria-label="API Key"
               />
             )}
 
-            <input
-              type="text"
-              value={llmConfig.model}
-              onChange={e => setLLMConfig({ model: e.target.value })}
-              placeholder="Model name"
-              className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 w-28"
-              aria-label="Model name"
-            />
+            {/* Model selector: Free preset models or detected local server models or text input */}
+            {freeModels ? (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                  {t('llm.freeBadge')}
+                </span>
+                <select
+                  value={llmConfig.model}
+                  onChange={e => setLLMConfig({ model: e.target.value })}
+                  className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 max-w-[200px]"
+                  aria-label="Free Model"
+                >
+                  {freeModels.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : isLocalServer ? (
+              <div className="flex items-center gap-1 shrink-0">
+                {detectedModels.length > 0 && (
+                  <select
+                    value={detectedModels.includes(llmConfig.model) ? llmConfig.model : '__custom__'}
+                    onChange={e => {
+                      if (e.target.value !== '__custom__') {
+                        setLLMConfig({ model: e.target.value });
+                      }
+                    }}
+                    className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 max-w-[170px]"
+                    aria-label="Detected model"
+                  >
+                    <optgroup label={t('llm.detectedModels')}>
+                      {detectedModels.map(m => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </optgroup>
+                    <option value="__custom__">{t('llm.customModel')}</option>
+                  </select>
+                )}
+                {(!detectedModels.length || !detectedModels.includes(llmConfig.model)) && (
+                  <input
+                    type="text"
+                    value={llmConfig.model}
+                    onChange={e => setLLMConfig({ model: e.target.value })}
+                    placeholder="Model name"
+                    className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 w-28"
+                    aria-label="Model name"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={handleDetectModels}
+                  disabled={fetchingModels}
+                  title={fetchingModels ? t('llm.fetchingModels') : t('llm.refreshModels')}
+                  className="px-1.5 py-1 text-[11px] rounded border border-border dark:border-border-dark hover:bg-surface-hover dark:hover:bg-surface-dark-hover transition-colors text-ink-muted hover:text-ink shrink-0"
+                >
+                  {fetchingModels ? '...' : '↻'}
+                </button>
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={llmConfig.model}
+                onChange={e => setLLMConfig({ model: e.target.value })}
+                placeholder="Model name"
+                className="px-2 py-1 bg-surface dark:bg-surface-dark rounded border border-border dark:border-border-dark text-[11px] font-mono text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50 w-28"
+                aria-label="Model name"
+              />
+            )}
 
             <button
               onClick={handleTest}
@@ -277,22 +437,45 @@ export default function LLMConfigPanel() {
           <div className="flex items-center justify-between mb-3">
             <div>
               <h4 className="text-xs font-bold uppercase tracking-wider text-ink dark:text-ink-dark flex items-center gap-1.5">
-                {BRAIN_ICON} Local On-Device AI Models Catalog
+                {BRAIN_ICON} {t('llm.hubTitle')}
               </h4>
               <p className="text-[11px] text-ink-muted dark:text-ink-dark-muted">
-                100% private in-browser inference via Transformers.js. No server requests or API tokens needed.
+                {t('llm.hubDesc')}
               </p>
             </div>
             <div className="text-[10px] font-mono text-ink-faint dark:text-ink-dark-faint">
-              Storage: {storage?.usageMb ? `${storage.usageMb.toFixed(1)} MB` : '0 MB'} ({storage?.files ?? 0} files)
+              {t('llm.storageLabel')}: {storage?.usageMb ? `${storage.usageMb.toFixed(1)} MB` : '0 MB'} ({storage?.files ?? 0} files)
             </div>
           </div>
+
+          {/* Hardware Audit Evaluation Banner */}
+          {hwProfile && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-surface-hover/80 dark:bg-surface-dark-hover/80 border border-border dark:border-border-dark text-[11px] mb-3 flex-wrap">
+              <span className="font-semibold text-accent flex items-center gap-1.5 shrink-0">
+                ⚡ {t('hub.hwAudit')}:
+              </span>
+              <span className="font-mono text-ink-muted dark:text-ink-dark-muted">
+                {hwProfile.summary}
+              </span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ml-auto border shrink-0 ${
+                hwProfile.tier === 'high-performance'
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                  : hwProfile.tier === 'entry'
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                    : 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
+              }`}>
+                {t(`hub.tier.${hwProfile.tier}`)}
+              </span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* Primary Models */}
             {LOCAL_MODELS.map((m: LocalModelOption) => {
               const isSelected = llmConfig.model === m.id;
               const isReady = isModelReady(m.id);
+              const meta = getModelMeta(m.id, m.label, m.blurb, t);
+              const hwRec = hwProfile?.recommendations[m.id];
 
               return (
                 <div
@@ -309,7 +492,7 @@ export default function LLMConfigPanel() {
                 >
                   <div className="flex items-start justify-between gap-1 mb-1.5">
                     <span className="font-semibold text-xs text-ink dark:text-ink-dark leading-tight">
-                      {m.label}
+                      {meta.label}
                     </span>
                     <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface dark:bg-surface-dark border border-border dark:border-border-dark shrink-0">
                       ~{m.approxSizeMb} MB
@@ -317,13 +500,34 @@ export default function LLMConfigPanel() {
                   </div>
 
                   <p className="text-[10px] text-ink-muted dark:text-ink-dark-muted line-clamp-2 mb-2 leading-relaxed">
-                    {m.blurb}
+                    {meta.blurb}
                   </p>
+
+                  {/* Hardware Recommendation Pill */}
+                  {hwRec && (
+                    <div className="mb-2">
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+                        hwRec.badge === 'recommended'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                          : hwRec.badge === 'warning'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                            : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30'
+                      }`}>
+                        {hwRec.badge === 'recommended' ? '★ ' : hwRec.badge === 'warning' ? '⚠ ' : '✓ '}
+                        {t(`hub.badge.${hwRec.badge}`)}
+                      </span>
+                      {meta.rec && (
+                        <span className="text-[9px] text-ink-faint dark:text-ink-dark-faint block mt-0.5">
+                          {meta.rec}
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap gap-1 mb-2">
                     {m.supportsJsonAnalysis && (
                       <span className="px-1 py-0.2 rounded text-[9px] font-mono font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                        JSON Analysis
+                        {t('llm.jsonAnalysis')}
                       </span>
                     )}
                     <span className="px-1 py-0.2 rounded text-[9px] font-mono font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/30">
@@ -336,7 +540,7 @@ export default function LLMConfigPanel() {
 
                   <div className="flex items-center justify-between pt-2 border-t border-border/40 text-[10px]">
                     <span className={isReady ? 'text-success dark:text-emerald-400 font-semibold' : 'text-ink-faint'}>
-                      {isReady ? '● Ready in Memory' : '○ Not Cached'}
+                      {isReady ? t('llm.readyInMemory') : t('llm.notCached')}
                     </span>
                     <button
                       type="button"
@@ -347,7 +551,7 @@ export default function LLMConfigPanel() {
                       }}
                       className="text-accent hover:underline font-semibold"
                     >
-                      {isReady ? 'Reload' : 'Download'}
+                      {isReady ? t('llm.reload') : t('llm.download')}
                     </button>
                   </div>
                 </div>
@@ -358,23 +562,26 @@ export default function LLMConfigPanel() {
           {/* Auxiliary Task-Specific Models */}
           <div className="mt-4 pt-3 border-t border-border/50">
             <h5 className="text-[10px] font-bold uppercase tracking-wider text-ink-faint dark:text-ink-dark-faint mb-2">
-              Auxiliary Pipeline Models (Perplexity Scorer & Plagiarism Embedder)
+              {t('llm.auxTitle')}
             </h5>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              {LOCAL_AUX_MODELS.map((aux: LocalModelOption) => (
-                <div
-                  key={aux.id}
-                  className="p-2 rounded border border-border dark:border-border-dark bg-panel/50 dark:bg-panel-dark/50 text-[11px]"
-                >
-                  <div className="flex items-center justify-between font-semibold text-ink dark:text-ink-dark">
-                    <span>{aux.label}</span>
-                    <span className="text-[9px] font-mono opacity-70">~{aux.approxSizeMb} MB</span>
+              {LOCAL_AUX_MODELS.map((aux: LocalModelOption) => {
+                const auxMeta = getModelMeta(aux.id, aux.label, aux.blurb, t);
+                return (
+                  <div
+                    key={aux.id}
+                    className="p-2 rounded border border-border dark:border-border-dark bg-panel/50 dark:bg-panel-dark/50 text-[11px]"
+                  >
+                    <div className="flex items-center justify-between font-semibold text-ink dark:text-ink-dark">
+                      <span>{auxMeta.label}</span>
+                      <span className="text-[9px] font-mono opacity-70">~{aux.approxSizeMb} MB</span>
+                    </div>
+                    <div className="text-[10px] text-ink-muted dark:text-ink-dark-muted mt-0.5">
+                      {auxMeta.blurb}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-ink-muted dark:text-ink-dark-muted mt-0.5">
-                    {aux.blurb}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

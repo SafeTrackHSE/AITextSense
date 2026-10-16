@@ -64,6 +64,114 @@ const SEVERITY_BADGE: Record<string, string> = {
   CLEAN: 'badge-success',
 };
 
+const I18N = {
+  en: {
+    briefingTitle: 'Attack Vector & Risk Briefing',
+    howItWorks: 'How It Works:',
+    whatItDoes: 'What It Does:',
+    targets: 'Targets:',
+    mitigation: 'Mitigation:',
+    explainAI: '✦ Explain with AI',
+    analyzing: 'Analyzing...',
+    deterministic: 'Deterministic',
+    aiAssisted: '✦ AI-Assisted',
+    aiTitle: 'Generate AI-powered forensic briefing',
+    aiOfflineNote: 'Requires Online Mode or On-Device model',
+    semanticAudit: '◈ Semantic Intent Audit',
+    confidence: 'Confidence:',
+    chooseSample: '-- Choose Sample --',
+    copyPayload: 'Copy Payload',
+    copied: '✓ Copied',
+    xrayDesc: 'Unmasking invisible Unicode & tags',
+    humanDesc: 'Rendered visual output',
+    tokens: 'tokens',
+  },
+  es: {
+    briefingTitle: 'Informe de vectores de ataque y riesgos',
+    howItWorks: 'Cómo funciona:',
+    whatItDoes: 'Qué hace:',
+    targets: 'Objetivos:',
+    mitigation: 'Mitigación:',
+    explainAI: '✦ Explicar con IA',
+    analyzing: 'Analizando...',
+    deterministic: 'Determinista',
+    aiAssisted: '✦ Asistido por IA',
+    aiTitle: 'Generar informe forense con IA',
+    aiOfflineNote: 'Requiere modo en línea o modelo local',
+    semanticAudit: '◈ Auditoría semántica de intención',
+    confidence: 'Confianza:',
+    chooseSample: '-- Elegir muestra --',
+    copyPayload: 'Copiar carga útil',
+    copied: '✓ Copiado',
+    xrayDesc: 'Desenmascarando Unicode y etiquetas invisibles',
+    humanDesc: 'Salida visual renderizada',
+    tokens: 'tokens',
+  },
+  fr: {
+    briefingTitle: 'Rapport sur les vecteurs d\'attaque et risques',
+    howItWorks: 'Fonctionnement :',
+    whatItDoes: 'Action :',
+    targets: 'Cibles :',
+    mitigation: 'Atténuation :',
+    explainAI: '✦ Expliquer avec l\'IA',
+    analyzing: 'Analyse en cours...',
+    deterministic: 'Déterministe',
+    aiAssisted: '✦ Assisté par IA',
+    aiTitle: 'Générer un rapport médico-légal par IA',
+    aiOfflineNote: 'Nécessite le mode en ligne ou un modèle local',
+    semanticAudit: '◈ Audit sémantique d\'intention',
+    confidence: 'Confiance :',
+    chooseSample: '-- Choisir un exemple --',
+    copyPayload: 'Copier la charge',
+    copied: '✓ Copié',
+    xrayDesc: 'Démasquage d\'Unicode et balises invisibles',
+    humanDesc: 'Sortie visuelle rendue',
+    tokens: 'tokens',
+  },
+  'pt-BR': {
+    briefingTitle: 'Relatório de vetores de ataque e riscos',
+    howItWorks: 'Como funciona:',
+    whatItDoes: 'O que faz:',
+    targets: 'Alvos:',
+    mitigation: 'Mitigação:',
+    explainAI: '✦ Explicar com IA',
+    analyzing: 'Analisando...',
+    deterministic: 'Determinístico',
+    aiAssisted: '✦ Assistido por IA',
+    aiTitle: 'Gerar relatório forense com IA',
+    aiOfflineNote: 'Requer Modo Online ou modelo local',
+    semanticAudit: '◈ Auditoria semântica de intenção',
+    confidence: 'Confiança:',
+    chooseSample: '-- Escolher amostra --',
+    copyPayload: 'Copiar payload',
+    copied: '✓ Copiado',
+    xrayDesc: 'Revelando Unicode e tags invisíveis',
+    humanDesc: 'Saída visual renderizada',
+    tokens: 'tokens',
+  },
+  it: {
+    briefingTitle: 'Rapporto sui vettori di attacco e rischi',
+    howItWorks: 'Come funziona:',
+    whatItDoes: 'Cosa fa:',
+    targets: 'Bersagli:',
+    mitigation: 'Mitigazione:',
+    explainAI: '✦ Spiega con IA',
+    analyzing: 'Analisi in corso...',
+    deterministic: 'Deterministico',
+    aiAssisted: '✦ Assistito da IA',
+    aiTitle: 'Genera report forense con IA',
+    aiOfflineNote: 'Richiede modalità online o modello locale',
+    semanticAudit: '◈ Audit semantico di intenzione',
+    confidence: 'Affidabilità:',
+    chooseSample: '-- Scegli campione --',
+    copyPayload: 'Copia payload',
+    copied: '✓ Copiato',
+    xrayDesc: 'Smascheramento di Unicode e tag invisibili',
+    humanDesc: 'Output visivo renderizzato',
+    tokens: 'token',
+  },
+};
+
 export default function InjectionPanel() {
   const {
     originalText,
@@ -75,6 +183,7 @@ export default function InjectionPanel() {
     setIsAnalyzingInjection,
     llmConfig,
     appMode,
+    uiLanguage,
   } = useStore();
 
   const applyTextMutation = useStore((s: any) => s.applyTextMutation);
@@ -82,6 +191,8 @@ export default function InjectionPanel() {
   const storeBriefings = useStore((s: any) => s.attackBriefings);
 
   const t = useT();
+  const dict = I18N[(uiLanguage as keyof typeof I18N) ?? 'en'] ?? I18N.en;
+
   const [selectedSample, setSelectedSample] = useState('');
   const [activeViewMode, setActiveViewMode] = useState<'xray' | 'human'>('xray');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -108,8 +219,6 @@ export default function InjectionPanel() {
     [originalText, llmConfig, canRunAI, setInjectionResult, setIsAnalyzingInjection]
   );
 
-  // BUG-04 FIX: Never call setOriginalText(res.revealedText) which wipes out results!
-  // Instead applyTextMutation and setCleanedText.
   const handleNeutralize = useCallback(
     (mode: 'strip' | 'reveal') => {
       if (!originalText) return;
@@ -213,13 +322,16 @@ export default function InjectionPanel() {
     return elements;
   }, [originalText]);
 
-  // Derive detected injection attack briefings
+  // Derive detected injection attack briefings with strict null safety
   const detectedVectors = useMemo(() => {
     if (!injectionResult) return [];
     const vectors: { key: string; item: any; briefing: AttackVectorBriefing }[] = [];
     const seen = new Set<string>();
 
-    for (const p of injectionResult.decodedPayloads) {
+    const payloads = Array.isArray(injectionResult?.decodedPayloads) ? injectionResult.decodedPayloads : [];
+    const findings = Array.isArray(injectionResult?.findings) ? injectionResult.findings : [];
+
+    for (const p of payloads) {
       const key = `payload-${p.vector}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -231,7 +343,7 @@ export default function InjectionPanel() {
       }
     }
 
-    for (const f of injectionResult.findings) {
+    for (const f of findings) {
       const key = `finding-${f.ruleId}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -250,9 +362,12 @@ export default function InjectionPanel() {
     return SEVERITY_BADGE[severity] ?? 'badge-neutral';
   };
 
+  const decodedPayloadsList = Array.isArray(injectionResult?.decodedPayloads) ? injectionResult.decodedPayloads : [];
+  const findingsList = Array.isArray(injectionResult?.findings) ? injectionResult.findings : [];
+  const tokenDifference = injectionResult?.tokenizerImpact?.tokenDifference ?? 0;
+
   const hasTriggersToAudit =
-    injectionResult &&
-    (injectionResult.decodedPayloads.length > 0 || injectionResult.findings.length > 0);
+    Boolean(injectionResult && (decodedPayloadsList.length > 0 || findingsList.length > 0));
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-surface dark:bg-surface-dark text-ink dark:text-ink-dark">
@@ -307,7 +422,7 @@ export default function InjectionPanel() {
             onChange={(e) => handleLoadSample(e.target.value)}
             className="bg-surface dark:bg-surface-dark border border-border dark:border-border-dark rounded px-2 py-1 text-xs text-ink dark:text-ink-dark focus:outline-none focus:ring-1 focus:ring-accent/50"
           >
-            <option value="">-- Choose Sample --</option>
+            <option value="">{dict.chooseSample}</option>
             {SAMPLE_ATTACKS.map((s) => (
               <option key={s.id} value={s.id}>
                 {t(s.labelKey)}
@@ -320,14 +435,25 @@ export default function InjectionPanel() {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
         {!injectionResult ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-ink-muted dark:text-ink-dark-muted space-y-3">
-            <span className="text-3xl opacity-50 font-mono">⛨</span>
-            <div className="max-w-md">
-              <h3 className="text-sm font-semibold text-ink dark:text-ink-dark mb-1">
-                {t('inj.title')}
-              </h3>
-              <p className="text-xs">{t('inj.empty')}</p>
-            </div>
+          <div className="illustration-box h-full my-auto space-y-3">
+            <svg
+              className="w-16 h-16 text-danger/60 animate-pulse-subtle"
+              viewBox="0 0 64 64"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="8" y="12" width="48" height="40" rx="8" opacity="0.25" fill="currentColor" />
+              <rect x="8" y="12" width="48" height="40" rx="8" />
+              <path d="M18 24h28M18 32h16M18 40h22" strokeDasharray="2 3" />
+              <circle cx="46" cy="36" r="8" fill="var(--color-surface, #fff)" className="dark:fill-surface-dark" />
+              <circle cx="46" cy="36" r="8" />
+              <path d="M43 36l2 2 4-4" />
+            </svg>
+            <h3 className="text-sm font-bold text-ink dark:text-ink-dark">{t('inj.title')}</h3>
+            <p className="text-xs text-ink-muted dark:text-ink-dark-muted max-w-sm">{t('inj.empty')}</p>
           </div>
         ) : (
           <>
@@ -361,7 +487,7 @@ export default function InjectionPanel() {
                   {t('inj.decodedPayloads')}
                 </div>
                 <div className="stat-value text-base font-bold text-ink dark:text-ink-dark">
-                  {injectionResult.decodedPayloads.length}
+                  {decodedPayloadsList.length}
                 </div>
               </div>
 
@@ -370,9 +496,9 @@ export default function InjectionPanel() {
                   {t('inj.tokensDelta')}
                 </div>
                 <div className="stat-value text-base font-bold text-danger flex items-baseline gap-1">
-                  <span>+{injectionResult.tokenizerImpact.tokenDifference}</span>
+                  <span>+{tokenDifference}</span>
                   <span className="text-[11px] font-normal text-ink-muted dark:text-ink-dark-muted">
-                    tokens
+                    {dict.tokens}
                   </span>
                 </div>
               </div>
@@ -383,17 +509,18 @@ export default function InjectionPanel() {
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-danger dark:text-red-400">
                   <span>🛡</span>
-                  <span>Attack Vector & Risk Briefing</span>
+                  <span>{dict.briefingTitle}</span>
                 </div>
                 <div className="space-y-2.5">
                   {detectedVectors.map(({ key, item, briefing: defaultBriefing }) => {
                     const briefing = localBriefings[key] ?? storeBriefings?.[key] ?? defaultBriefing;
                     const isLoading = aiLoading[key] ?? false;
+                    const targetsList = Array.isArray(briefing?.targets) ? briefing.targets : [];
 
                     return (
                       <div
                         key={key}
-                        className="p-3.5 rounded-lg border border-danger/30 bg-panel dark:bg-panel-dark space-y-2.5 shadow-sm"
+                        className="p-3.5 rounded-xl border border-danger/30 bg-gradient-to-br from-panel via-surface to-panel dark:from-panel-dark dark:via-surface-dark dark:to-panel-dark space-y-2.5 shadow-sm"
                       >
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <div className="flex items-center gap-2">
@@ -408,40 +535,40 @@ export default function InjectionPanel() {
                           <div className="flex items-center gap-2">
                             <span className="badge-neutral font-mono text-[9px]">
                               {briefing.source === 'on-device-ai' || briefing.source === 'local-llm' || briefing.source === 'cloud-llm'
-                                ? '✦ AI-Assisted'
-                                : 'Deterministic'}
+                                ? dict.aiAssisted
+                                : dict.deterministic}
                             </span>
                             <button
                               onClick={() => handleExplainAI(key, item)}
                               disabled={!canRunAI || isLoading}
-                              title={canRunAI ? 'Generate AI-powered forensic briefing' : 'Requires Online Mode or On-Device model'}
+                              title={canRunAI ? dict.aiTitle : dict.aiOfflineNote}
                               className="px-2 py-0.5 rounded text-[10px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors disabled:opacity-40"
                             >
-                              {isLoading ? 'Analyzing...' : '✦ Explain with AI'}
+                              {isLoading ? dict.analyzing : dict.explainAI}
                             </button>
                           </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-1">
                           <div className="p-2 rounded bg-surface/70 dark:bg-surface-dark/70 border border-border/50 dark:border-border-dark/50">
-                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">How It Works:</span>
+                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">{dict.howItWorks}</span>
                             <p className="text-ink-muted dark:text-ink-dark-muted leading-relaxed">{briefing.mechanism}</p>
                           </div>
                           <div className="p-2 rounded bg-surface/70 dark:bg-surface-dark/70 border border-border/50 dark:border-border-dark/50">
-                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">What It Does:</span>
+                            <span className="font-semibold text-ink dark:text-ink-dark block mb-0.5">{dict.whatItDoes}</span>
                             <p className="text-ink-muted dark:text-ink-dark-muted leading-relaxed">{briefing.whatItDoes}</p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
-                          <span className="font-semibold text-ink dark:text-ink-dark">Targets:</span>
-                          {briefing.targets.map(tg => (
+                          <span className="font-semibold text-ink dark:text-ink-dark">{dict.targets}</span>
+                          {targetsList.map(tg => (
                             <span key={tg} className="badge-neutral text-[9px]">{tg}</span>
                           ))}
                         </div>
 
                         <div className="text-[11px] bg-danger/5 dark:bg-danger/10 border border-danger/15 rounded p-2 text-ink-muted dark:text-ink-dark-muted">
-                          <span className="font-semibold text-danger dark:text-red-400">Mitigation: </span>
+                          <span className="font-semibold text-danger dark:text-red-400">{dict.mitigation} </span>
                           {briefing.mitigation}
                         </div>
                       </div>
@@ -453,11 +580,11 @@ export default function InjectionPanel() {
 
             {/* Semantic LLM Audit Callout (if available) */}
             {injectionResult.semanticEvaluation && (
-              <div className="stat-card border-accent/40 space-y-1 text-xs">
+              <div className="panel-card border-accent/40 p-3 space-y-1 text-xs">
                 <div className="flex items-center gap-2 font-semibold text-accent">
-                  <span>◈ Semantic Intent Audit</span>
+                  <span>{dict.semanticAudit}</span>
                   <span className="badge-neutral font-mono text-[10px]">
-                    Confidence: {(injectionResult.semanticEvaluation.confidence * 100).toFixed(0)}%
+                    {dict.confidence} {((injectionResult.semanticEvaluation.confidence ?? 0.8) * 100).toFixed(0)}%
                   </span>
                 </div>
                 <p className="text-ink dark:text-ink-dark text-xs">
@@ -467,7 +594,7 @@ export default function InjectionPanel() {
             )}
 
             {/* Dual-Plane Visualizer (Human View vs LLM Ingestion X-Ray View) */}
-            <div className="border border-border dark:border-border-dark rounded overflow-hidden bg-panel dark:bg-panel-dark">
+            <div className="border border-border dark:border-border-dark rounded-xl overflow-hidden bg-panel dark:bg-panel-dark shadow-sm">
               <div className="flex items-center justify-between px-3 py-1.5 border-b border-border dark:border-border-dark bg-panel2 dark:bg-panel2-dark">
                 <div className="flex items-center gap-1.5">
                   <button
@@ -492,9 +619,7 @@ export default function InjectionPanel() {
                   </button>
                 </div>
                 <span className="text-[10px] text-ink-muted dark:text-ink-dark-muted font-mono">
-                  {activeViewMode === 'xray'
-                    ? 'Unmasking invisible Unicode & tags'
-                    : 'Rendered visual output'}
+                  {activeViewMode === 'xray' ? dict.xrayDesc : dict.humanDesc}
                 </span>
               </div>
 
@@ -504,20 +629,20 @@ export default function InjectionPanel() {
             </div>
 
             {/* Decoded Hidden Payloads List */}
-            {injectionResult.decodedPayloads.length > 0 ? (
+            {decodedPayloadsList.length > 0 ? (
               <div className="space-y-2">
                 <h4 className="text-[11px] font-bold uppercase tracking-wider text-ink-muted dark:text-ink-dark-muted flex items-center gap-2">
                   <span>{t('inj.decodedPayloads')}</span>
                   <span className="badge-neutral font-mono">
-                    {injectionResult.decodedPayloads.length}
+                    {decodedPayloadsList.length}
                   </span>
                 </h4>
 
                 <div className="space-y-2">
-                  {injectionResult.decodedPayloads.map((payload) => (
+                  {decodedPayloadsList.map((payload) => (
                     <div
                       key={payload.id}
-                      className="p-3 rounded border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-1.5"
+                      className="p-3 rounded-xl border border-border dark:border-border-dark bg-panel dark:bg-panel-dark space-y-1.5 shadow-sm"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
@@ -532,7 +657,7 @@ export default function InjectionPanel() {
                           onClick={() => copyToClipboard(payload.decodedText, payload.id)}
                           className="text-[11px] text-accent hover:underline flex items-center gap-1 font-medium"
                         >
-                          {copiedId === payload.id ? '✓ Copied' : 'Copy Payload'}
+                          {copiedId === payload.id ? dict.copied : dict.copyPayload}
                         </button>
                       </div>
 
@@ -548,22 +673,22 @@ export default function InjectionPanel() {
                 </div>
               </div>
             ) : (
-              <div className="p-3.5 rounded border border-success/40 bg-success-muted text-center text-xs text-success dark:text-emerald-400">
+              <div className="p-3.5 rounded-xl border border-success/40 bg-success-muted text-center text-xs text-success dark:text-emerald-400">
                 ✓ {t('inj.noInjections')}
               </div>
             )}
 
             {/* Findings / Signature Matches */}
-            {injectionResult.findings.length > 0 && (
+            {findingsList.length > 0 && (
               <div className="space-y-2">
                 <h4 className="text-[11px] font-bold uppercase tracking-wider text-ink-muted dark:text-ink-dark-muted">
                   {t('inj.findings')}
                 </h4>
                 <div className="space-y-2">
-                  {injectionResult.findings.map((f) => (
+                  {findingsList.map((f) => (
                     <div
                       key={f.id}
-                      className="p-3 rounded border border-danger/30 bg-danger-muted/30 text-xs space-y-1"
+                      className="p-3 rounded-xl border border-danger/30 bg-danger-muted/30 text-xs space-y-1 shadow-sm"
                     >
                       <div className="flex items-center gap-2 font-semibold text-danger dark:text-red-400">
                         <span>{f.title}</span>
@@ -573,7 +698,7 @@ export default function InjectionPanel() {
                       </div>
                       <p className="text-ink dark:text-ink-dark text-xs">{f.description}</p>
                       <div className="text-[11px] text-ink-muted dark:text-ink-dark-muted">
-                        <span className="font-semibold">Mitigation:</span>{' '}
+                        <span className="font-semibold">{dict.mitigation}</span>{' '}
                         {f.mitigation}
                       </div>
                     </div>

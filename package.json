@@ -3,8 +3,8 @@
   "private": true,
   "version": "3.0.0",
   "author": "Wilson Volpe",
-  "license": "UNLICENSED",
-  "description": "AI TextSense v2.1 — Forensic Text & Prompt Injection Inspector. (c) 2026 Wilson Volpe. All rights reserved.",
+  "license": "Apache-2.0",
+  "description": "AI TextSense v3.0.0 — Forensic Text Integrity, AI Fingerprint Removal, Threat Defense & Plagiarism Suite. Licensed under Apache-2.0.",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -454,11 +454,11 @@ export const useStore = create<AppState>((set, get) => ({
       const scrubReportSection = footprintScrubReport ? {
         beforeScore: footprintScrubReport.beforeScore,
         afterScore: footprintScrubReport.afterScore,
-        transformsApplied: footprintScrubReport.transforms.length,
-        llmWordsRemoved: Math.max(0, footprintScrubReport.breakdown.llmWordsBefore - footprintScrubReport.breakdown.llmWordsAfter),
-        hedgingRemoved: Math.max(0, footprintScrubReport.breakdown.hedgingBefore - footprintScrubReport.breakdown.hedgingAfter),
-        templatesReplaced: Math.max(0, footprintScrubReport.breakdown.templatesBefore - footprintScrubReport.breakdown.templatesAfter),
-        typographicFixed: Math.max(0, footprintScrubReport.breakdown.typographicBefore - footprintScrubReport.breakdown.typographicAfter),
+        transformsApplied: footprintScrubReport.transforms?.length ?? 0,
+        llmWordsRemoved: Math.max(0, (footprintScrubReport.breakdown?.llmWordsBefore ?? 0) - (footprintScrubReport.breakdown?.llmWordsAfter ?? 0)),
+        hedgingRemoved: Math.max(0, (footprintScrubReport.breakdown?.hedgingBefore ?? 0) - (footprintScrubReport.breakdown?.hedgingAfter ?? 0)),
+        templatesReplaced: Math.max(0, (footprintScrubReport.breakdown?.templatesBefore ?? 0) - (footprintScrubReport.breakdown?.templatesAfter ?? 0)),
+        typographicFixed: Math.max(0, (footprintScrubReport.breakdown?.typographicBefore ?? 0) - (footprintScrubReport.breakdown?.typographicAfter ?? 0)),
       } : null;
 
       const fullReport = await buildReport({
@@ -481,7 +481,7 @@ export const useStore = create<AppState>((set, get) => ({
         watermarkResult: wResult,
         watermarkSweep: wSweep,
         footprintAnalysis: fResult,
-        sentenceHeatmap: [heatmapOverlay],
+        sentenceHeatmap: heatmapOverlay ? [heatmapOverlay] : [],
         plagiarismResult: pResult,
         report: fullReport,
       });
